@@ -19,7 +19,8 @@
   function blankState() {
     return {
       v: 1, lessons: {}, reviews: {}, final: null, days: [], exercises: {}, read: {},
-      seenBadges: [], sound: true, previewAll: false, installHidden: false
+      seenBadges: [], sound: true, previewAll: false, installHidden: false,
+      feed: {}, seen: [], saved: [], blitz: { best: 0, days: [] }
     };
   }
   function load() {
@@ -105,7 +106,8 @@
   function weekOf(n) { return n <= 28 ? Math.ceil(n / 7) : 5; }
 
   /* ================= game: XP, levels, badges ================= */
-  const XP = { lesson: 20, perQ: 10, perfect: 15, review: 30, reviewPerfect: 30, final: 50, finalPerfect: 50, exercise: 15, streakDay: 5 };
+  const XP = { lesson: 20, perQ: 10, perfect: 15, review: 30, reviewPerfect: 30, final: 50, finalPerfect: 50, exercise: 15, streakDay: 5, blitzBest: 5, blitzDay: 10 };
+  const FEED_XP = { right: 5, wrong: 1, read: 2, done: 10 };
   const LEVELS = [
     { xp: 0, name: 'מתבונן מתחיל' },
     { xp: 100, name: 'שם לב' },
@@ -115,8 +117,10 @@
     { xp: 1000, name: 'שואל שאלות טובות' },
     { xp: 1400, name: 'מספר סיפורים' },
     { xp: 1900, name: 'נוכחות מלאה' },
-    { xp: 2500, name: 'קורא אנשים' },
-    { xp: 3100, name: 'אמן הסבירות' }
+    { xp: 2500, name: 'עין חדה' },
+    { xp: 3200, name: 'קורא אנשים' },
+    { xp: 4000, name: 'מנטור תקשורת' },
+    { xp: 4900, name: 'אמן הסבירות' }
   ];
 
   function computeXP(s) {
@@ -126,6 +130,8 @@
     if (s.final) xp += XP.final + s.final.best * XP.perQ + (s.final.best === s.final.total ? XP.finalPerfect : 0);
     xp += Object.keys(s.exercises).length * XP.exercise;
     xp += streaks(s).best * XP.streakDay;
+    Object.values(s.feed || {}).forEach(r => { xp += FEED_XP[r.r] || 0; });
+    if (s.blitz) xp += (s.blitz.best || 0) * XP.blitzBest + (s.blitz.days || []).length * XP.blitzDay;
     return xp;
   }
   function levelInfo(xp) {
@@ -155,6 +161,14 @@
     { id: 'reviews', icon: 'trophy', name: 'ארבעה שבועות', desc: 'סיימתם את כל ארבעת מבחני החזרה', test: c => c.reviews >= 4 },
     { id: 'half', icon: 'flag', name: 'חצי דרך', desc: '15 שיעורים מאחוריכם', test: c => c.done >= 15 },
     { id: 'grad', icon: 'crown', name: 'בוגרי המסלול', desc: 'כל 30 השיעורים', test: c => c.done >= 30 },
+    { id: 'feed25', icon: 'bolt', name: 'גוללים ולומדים', desc: '25 כרטיסים בפיד', test: c => c.feed >= 25 },
+    { id: 'feed100', icon: 'bolt', name: 'בולעי ידע', desc: '100 כרטיסים בפיד', test: c => c.feed >= 100 },
+    { id: 'feedall', icon: 'bolt', name: 'ראיתם הכל', desc: 'כל הכרטיסים בפיד', test: c => c.feed >= c.feedTotal },
+    { id: 'myths10', icon: 'shield', name: 'ציידי מיתוסים', desc: '10 תשובות נכונות ב"מיתוס או עובדה"', test: c => c.tfRight >= 10 },
+    { id: 'field5', icon: 'check', name: 'אנשי שטח', desc: '5 משימות שטח מהפיד', test: c => c.missions >= 5 },
+    { id: 'saver', icon: 'bookmark', name: 'אספנים', desc: '10 כרטיסים שמורים', test: c => c.saved >= 10 },
+    { id: 'blitz10', icon: 'bolt', name: 'מהירי מחשבה', desc: '10 ומעלה בסבב בזק', test: c => c.blitzBest >= 10 },
+    { id: 'blitz20', icon: 'bolt', name: 'ברק', desc: '20 ומעלה בסבב בזק', test: c => c.blitzBest >= 20 },
     { id: 'master', icon: 'crown', name: 'אמני הסבירות', desc: '10 ומעלה במבחן המסכם', test: c => c.s.final && c.s.final.best >= 10 }
   ];
   function earnedBadges(s) {
@@ -167,6 +181,12 @@
       bestStreak: streaks(s).best,
       ex: Object.keys(s.exercises).length,
       reviews: Object.keys(s.reviews).length,
+      feed: Object.keys(s.feed || {}).length,
+      feedTotal: (window.FEED || []).length || Infinity,
+      tfRight: Object.keys(s.feed || {}).filter(k => s.feed[k].r === 'right' && (cardById(k) || {}).type === 'tf').length,
+      missions: Object.values(s.feed || {}).filter(r => r.r === 'done').length,
+      saved: (s.saved || []).length,
+      blitzBest: (s.blitz && s.blitz.best) || 0,
       comeback: recs.concat(Object.values(s.reviews), s.final ? [s.final] : []).some(r => r.best > r.first)
     };
     return BADGES.filter(b => b.test(c)).map(b => b.id);
@@ -339,6 +359,8 @@
     cross: '<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
     back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
     mark: '<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="var(--accent)"/><path d="M7 17.5c2.6-4.4 5.6-6.5 9-6.5s6.4 2.1 9 6.5" fill="none" stroke="var(--on-accent)" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="18" r="3.2" fill="var(--on-accent)"/></svg>',
+    bookmark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4.5L6 21z"/></svg>',
+    bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
     star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z"/></svg>'
   };
   const GLYPH = {
@@ -350,7 +372,9 @@
     up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7"/>',
     flag: '<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>',
-    crown: '<path d="M4 8l4 4 4-7 4 7 4-4-2 10H6z"/>'
+    crown: '<path d="M4 8l4 4 4-7 4 7 4-4-2 10H6z"/>',
+    bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+    bookmark: '<path d="M6 3h12v18l-6-4.5L6 21z"/>'
   };
   function badgeIcon(b, locked, size) {
     return '<span class="badge-ic' + (locked ? ' locked' : '') + (size ? ' ' + size : '') + '"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH[b.icon] + '</svg></span>';
@@ -376,7 +400,10 @@
       else a.removeAttribute('aria-current');
     });
   }
-  function render(html, tab, title) {
+  function render(html, tab, title, mode) {
+    if (feedObserver) { feedObserver.disconnect(); feedObserver = null; }
+    if (blitz && blitz.raf) { cancelAnimationFrame(blitz.raf); blitz.raf = null; }
+    document.body.classList.toggle('feed-mode', mode === 'feed');
     view.innerHTML = html;
     setTab(tab);
     document.title = title ? title + ' · שפת גוף ב-30 יום' : 'שפת גוף ב-30 יום';
@@ -433,17 +460,18 @@
     const q = [
       { done: !!state.read[n], label: 'לקרוא את השיעור', xp: null, href: '#lesson-' + n },
       { done: !!lessonRec(n), label: 'לעבור את המבחן', xp: '+' + (XP.lesson + 3 * XP.perQ + XP.perfect), href: '#quiz-' + n },
-      { done: !!state.exercises[n], label: 'לעשות את התרגיל בחיים', xp: '+' + XP.exercise, href: '#lesson-' + n + '-ex' }
+      { done: !!state.exercises[n], label: 'לעשות את התרגיל בחיים', xp: '+' + XP.exercise, href: '#lesson-' + n + '-ex' },
+      { done: feedToday() >= 10, label: 'לגלול 10 כרטיסים בפיד (' + Math.min(10, feedToday()) + '/10)', xp: null, href: '#feed' }
     ];
     const count = q.filter(x => x.done).length;
     return '<section class="card quests" aria-labelledby="quests-h">' +
-      '<div class="quests-head"><h2 id="quests-h">המשימות של היום</h2><span class="chip' + (count === 3 ? ' ok' : '') + ' num">' + count + '/3</span></div>' +
+      '<div class="quests-head"><h2 id="quests-h">המשימות של היום</h2><span class="chip' + (count === q.length ? ' ok' : '') + ' num">' + count + '/' + q.length + '</span></div>' +
       '<p class="muted small">שיעור ' + n + ': ' + esc(L.title) + '</p>' +
       '<ul class="qlist">' + q.map(x =>
         '<li class="' + (x.done ? 'done' : '') + '"><a href="' + x.href + '"><span class="qbox">' + (x.done ? ICON.check : '') + '</span>' +
         '<span class="qlabel">' + x.label + '</span>' + (x.xp ? '<span class="qxp num">' + (x.done ? '' : 'עד ') + '<bdi dir="ltr">' + x.xp + ' XP</bdi></span>' : '') + '</a></li>'
       ).join('') + '</ul>' +
-      (count === 3 ? '<p class="small"><strong>כל המשימות הושלמו.</strong> נתראה מחר עם שלב חדש.</p>' : '') +
+      (count === q.length ? '<p class="small"><strong>כל המשימות הושלמו.</strong> נתראה מחר עם שלב חדש.</p>' : '') +
     '</section>';
   }
 
@@ -520,7 +548,7 @@
 
     render(
       '<div class="topline"><div class="brand">' + ICON.mark + '<span>שפת גוף ב-30 יום</span></div>' + streakChip() + '</div>' +
-      playerCard(true) + todayCard + questsBlock() + reviews + installBanner() + scaleBlock() + notice,
+      playerCard(true) + todayCard + questsBlock() + reviews + feedPromo() + installBanner() + scaleBlock() + notice,
       'home'
     );
     bindInstall();
@@ -924,7 +952,10 @@
         '<div class="stat"><span class="v num">' + s.best + '</span><span class="l">הרצף הכי ארוך</span></div>' +
         '<div class="stat"><span class="v num">' + recs.length + '<small> מתוך 30</small></span><span class="l">שלבים שהושלמו</span></div>' +
         '<div class="stat gold"><span class="v num">' + starsTotal + '<small> מתוך 90</small></span><span class="l">כוכבים</span></div>' +
+        '<div class="stat"><span class="v num">' + Object.keys(state.feed).length + '<small> מתוך ' + FEED.length + '</small></span><span class="l">כרטיסים בפיד</span></div>' +
+        '<div class="stat"><span class="v num">' + (state.blitz.best || 0) + '</span><span class="l">שיא בסבב בזק</span></div>' +
       '</div>' +
+      '<a class="card linkcard" href="#saved">' + ICON.bookmark + '<span><strong>הכרטיסים השמורים</strong><br><span class="muted small">' + state.saved.length + ' כרטיסים</span></span></a>' +
 
       '<section class="card"><div class="quests-head"><h2>הישגים</h2><span class="chip num">' + earned.length + '/' + BADGES.length + '</span></div><div class="badge-grid">' +
         BADGES.map(b => {
@@ -933,7 +964,7 @@
         }).join('') + '</div></section>' +
 
       '<section class="card"><h2>ימי לימוד</h2>' + calendarHtml() +
-        '<p class="muted small">יום נספר ברצף כשמסיימים בו מבחן של שלב או מבחן חזרה.</p></section>';
+        '<p class="muted small">יום נספר ברצף כשמסיימים בו מבחן, משחקים סבב בזק או עונים על כרטיס בפיד.</p></section>';
 
     if (recs.length) {
       html += '<section class="card"><div class="quests-head"><h2>ציונים</h2><span class="muted small">ממוצע ' + avg + '%</span></div><ul class="scores">' +
@@ -948,6 +979,8 @@
       '<li><span>3 מתוך 3</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.perfect + '</bdi></b></li>' +
       '<li><span>משימה בחיים האמיתיים</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.exercise + '</bdi></b></li>' +
       '<li><span>מבחן חזרה שבועי</span><b class="num">' + XP.review + ' + ' + XP.perQ + ' לכל תשובה נכונה</b></li>' +
+      '<li><span>כרטיס בפיד: תשובה נכונה / טיפ / משימת שטח</span><b class="num"><bdi dir="ltr">+' + FEED_XP.right + ' / +' + FEED_XP.read + ' / +' + FEED_XP.done + '</bdi></b></li>' +
+      '<li><span>סבב בזק: כל נקודה בשיא, וכל יום ששיחקתם</span><b class="num"><bdi dir="ltr">+' + XP.blitzBest + ' / +' + XP.blitzDay + '</bdi></b></li>' +
       '<li><span>כל יום ברצף הכי ארוך</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.streakDay + '</bdi></b></li>' +
       '</ul><p class="muted small">רמה ' + L.n + ' מתוך ' + LEVELS.length + '. ניסיון חוזר נותן XP רק אם הוא משפר את הציון הכי טוב.</p></section>';
 
@@ -981,6 +1014,278 @@
     });
   }
 
+  /* ================= feed (short cards, one per screen) ================= */
+  const FEED = window.FEED || [];
+  const FEED_TOPICS = window.FEED_TOPICS || {};
+  const TYPE_LABEL = { tip: 'טיפ', tf: 'מיתוס או עובדה?', sc: 'מה הייתם עושים?', mission: 'משימת שטח' };
+  let feedObserver = null;
+  let deck = null;
+  let deckShown = 0;
+  const optOrders = {};
+
+  function cardById(id) { return FEED.find(c => c.id === id) || null; }
+  function topicName(t) {
+    if (typeof t === 'number') { const L = lesson(t); return L ? 'שלב ' + t + ' · ' + L.title : ''; }
+    return FEED_TOPICS[t] || '';
+  }
+  function feedToday() {
+    const t = today();
+    return Object.values(state.feed).filter(r => r.d === t).length;
+  }
+  function optOrder(id) {
+    if (!optOrders[id]) optOrders[id] = shuffle([0, 1, 2]);
+    return optOrders[id];
+  }
+  function buildDeck() {
+    const seen = new Set(state.seen);
+    const isNew = c => !seen.has(c.id) && !state.feed[c.id];
+    const ids = shuffle(FEED.filter(isNew)).concat(shuffle(FEED.filter(c => !isNew(c)))).map(c => c.id);
+    const out = [];
+    ids.forEach((id, k) => { out.push(id); if ((k + 1) % 12 === 0) out.push('#blitz'); });
+    return out;
+  }
+
+  function feedFeedback(ok, text) {
+    return '<div class="feedback ' + (ok ? 'right' : 'wrong') + '" role="status"><strong>' + (ok ? 'נכון!' : 'לא בדיוק') + '</strong><p>' + esc(text) + '</p></div>';
+  }
+  function finnerHtml(c) {
+    const done = state.feed[c.id];
+    let body = '';
+    if (c.type === 'tip') {
+      body = '<h2 class="ftitle">' + esc(c.title) + '</h2><p class="ftext">' + esc(c.text) + '</p>' +
+        (done ? '<p class="fdone">' + ICON.check + ' נלמד</p>'
+          : '<button type="button" class="btn big" data-act="read">הבנתי <bdi dir="ltr">+' + FEED_XP.read + ' XP</bdi></button>');
+    } else if (c.type === 'tf') {
+      body = '<p class="fstatement">' + esc(c.text) + '</p>';
+      if (!done) body += '<div class="tf-btns"><button type="button" class="btn big" data-act="tf" data-v="1">עובדה</button><button type="button" class="btn big alt" data-act="tf" data-v="0">מיתוס</button></div>';
+      else body += feedFeedback(done.r === 'right', (c.truth ? 'זו עובדה. ' : 'זה מיתוס. ') + c.explain);
+    } else if (c.type === 'sc') {
+      body = '<p class="fstatement sm">' + esc(c.text) + '</p><div class="options">';
+      optOrder(c.id).forEach((k, pos) => {
+        let cls = 'opt', mark = '<span></span>';
+        if (done) {
+          if (k === 0) { cls += ' right'; mark = ICON.check; }
+          else if (k === done.p) { cls += ' wrong'; mark = ICON.cross; }
+          else cls += ' dim';
+        }
+        body += '<button type="button" class="' + cls + '" data-act="sc" data-k="' + k + '"' + (done ? ' disabled' : '') + '><span class="letter">' + LETTERS[pos] + '</span><span>' + esc(c.options[k]) + '</span>' + mark + '</button>';
+      });
+      body += '</div>';
+      if (done) body += feedFeedback(done.r === 'right', c.explain);
+    } else {
+      body = '<p class="fstatement sm">' + esc(c.text) + '</p>' +
+        (done ? '<p class="fdone">' + ICON.check + ' בוצע. כל הכבוד.</p>'
+          : '<button type="button" class="btn big" data-act="mission">עשיתי את זה <bdi dir="ltr">+' + FEED_XP.done + ' XP</bdi></button><p class="muted small">לא עכשיו? שמרו את הכרטיס וחזרו אליו אחרי שעשיתם.</p>');
+    }
+    return '<div class="finner"><div class="fmeta"><span class="chip ftype">' + TYPE_LABEL[c.type] + '</span><span class="ftopic">' + esc(topicName(c.topic)) + '</span></div>' + body + '</div>';
+  }
+  function feedCardHtml(id, first) {
+    if (id === '#blitz') {
+      return '<article class="fcard t-promo" data-id="#blitz"><div class="finner center-in">' +
+        '<span class="promo-ic">' + ICON.bolt + '</span><h2 class="ftitle">סבב בזק</h2>' +
+        '<p class="ftext">60 שניות של מיתוס או עובדה. כמה תספיקו?</p>' +
+        '<p class="muted">השיא שלכם: <span class="num">' + (state.blitz.best || 0) + '</span></p>' +
+        '<a class="btn gold big" href="#blitz">לשחק</a></div></article>';
+    }
+    const c = cardById(id);
+    if (!c) return '';
+    const saved = state.saved.includes(id);
+    return '<article class="fcard t-' + c.type + '" data-id="' + id + '">' + finnerHtml(c) +
+      '<button type="button" class="fsave' + (saved ? ' on' : '') + '" data-act="save" aria-pressed="' + saved + '" aria-label="שמירת הכרטיס">' + ICON.bookmark + '</button>' +
+      (first ? '<p class="fhint" aria-hidden="true">גללו למעלה לכרטיס הבא</p>' : '') + '</article>';
+  }
+
+  function feedTopHtml() {
+    return '<div class="feed-top"><span class="feed-title">פיד הלמידה</span>' +
+      '<span class="chip num" id="feed-count">היום: ' + feedToday() + '</span>' +
+      '<a class="feed-ic" href="#blitz" aria-label="סבב בזק">' + ICON.bolt + '</a>' +
+      '<a class="feed-ic" href="#saved" aria-label="כרטיסים שמורים">' + ICON.bookmark + '</a></div>';
+  }
+
+  function appendFeed(n) {
+    const wrap = document.getElementById('feed-list');
+    if (!wrap) return;
+    let html = '';
+    for (let k = 0; k < n; k++) {
+      if (deckShown >= deck.length) { deck = deck.concat(buildDeck()); }
+      html += feedCardHtml(deck[deckShown], deckShown === 0);
+      deckShown++;
+    }
+    wrap.insertAdjacentHTML('beforeend', html);
+    wrap.querySelectorAll('.fcard:not([data-obs])').forEach(el => { el.dataset.obs = '1'; if (feedObserver) feedObserver.observe(el); });
+  }
+
+  let seenDirty = false;
+  function viewFeed() {
+    deck = buildDeck();
+    deckShown = 0;
+    render(feedTopHtml() + '<div id="feed-list" class="feed-list"></div>', 'feed', 'פיד', 'feed');
+    feedObserver = new IntersectionObserver(entries => {
+      entries.forEach(en => {
+        if (!en.isIntersecting) return;
+        const id = en.target.dataset.id;
+        if (id && id[0] !== '#' && !state.seen.includes(id)) { state.seen.push(id); seenDirty = true; }
+        const all = view.querySelectorAll('.fcard');
+        if (en.target === all[all.length - 3] || en.target === all[all.length - 1]) appendFeed(8);
+      });
+      if (seenDirty) { seenDirty = false; save(); }
+    }, { root: view, threshold: 0.6 });
+    appendFeed(10);
+  }
+
+  function viewSaved() {
+    const list = state.saved.map(id => cardById(id)).filter(Boolean);
+    render(backLink('#feed', 'לפיד') +
+      '<div class="lesson-head"><h1>כרטיסים שמורים</h1><p class="muted">' + (list.length ? list.length + ' כרטיסים. לחצו על הסימנייה כדי להסיר.' : '') + '</p></div>' +
+      (list.length
+        ? '<div class="saved-list">' + list.map(c => feedCardHtml(c.id)).join('') + '</div>'
+        : '<section class="card empty"><h2>עוד לא שמרתם כרטיסים</h2><p>בפיד, לחצו על הסימנייה בפינת הכרטיס כדי לשמור אותו כאן.</p><a class="btn" href="#feed">לפיד</a></section>'),
+      'feed', 'שמורים');
+  }
+
+  function onCardAction(e) {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const art = btn.closest('.fcard');
+    if (!art) return;
+    const id = art.dataset.id;
+    const c = cardById(id);
+    if (!c) return;
+    const act = btn.dataset.act;
+    if (act === 'save') {
+      const on = !state.saved.includes(id);
+      const res = award(() => { if (on) state.saved.push(id); else state.saved = state.saved.filter(x => x !== id); });
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+      sfx('tick'); buzz(10);
+      if (on) toast(ICON.bookmark.replace('<svg', '<svg class="toast-ic"') + '<span>נשמר. תמצאו אותו ב"כרטיסים שמורים".</span>');
+      celebrate(res);
+      return;
+    }
+    if (state.feed[id]) return;
+    let r, p;
+    if (act === 'read') r = 'read';
+    else if (act === 'mission') r = 'done';
+    else if (act === 'tf') r = ((btn.dataset.v === '1') === c.truth) ? 'right' : 'wrong';
+    else if (act === 'sc') { p = Number(btn.dataset.k); r = p === 0 ? 'right' : 'wrong'; }
+    else return;
+    const res = award(() => { state.feed[id] = p === undefined ? { d: today(), r } : { d: today(), r, p }; markActive(); });
+    if (r === 'wrong') { sfx('wrong'); buzz([40, 50, 40]); } else { sfx('right'); buzz(20); }
+    const fin = art.querySelector('.finner');
+    fin.outerHTML = finnerHtml(c);
+    if (r === 'wrong') { const w = art.querySelector('.opt.wrong'); if (w && !reduceMotion()) w.classList.add('shake'); }
+    if (res.gained > 0) {
+      const f = document.createElement('span');
+      f.className = 'xpfloat big num';
+      f.textContent = '+' + res.gained + ' XP';
+      art.querySelector('.finner').appendChild(f);
+    }
+    const cnt = document.getElementById('feed-count');
+    if (cnt) cnt.textContent = 'היום: ' + feedToday();
+    if (feedToday() === 10) toast('<span class="toast-xp">' + ICON.check.replace('class="mark"', 'class="toast-ic"') + '</span><span><strong>משימת הפיד של היום הושלמה</strong><br>10 כרטיסים. אפשר להמשיך לגלול.</span>');
+    celebrate(res);
+  }
+  view.addEventListener('click', onCardAction);
+
+  function feedPromo() {
+    const fresh = FEED.filter(c => !state.feed[c.id] && !state.seen.includes(c.id)).length;
+    return '<section class="card feed-promo">' +
+      '<div class="quests-head"><h2>פיד הלמידה</h2><span class="chip accent num">' + fresh + ' חדשים</span></div>' +
+      '<p class="small">כרטיסים קצרים, אחד בכל מסך: טיפים, מיתוס או עובדה, מה הייתם עושים, ומשימות שטח. גוללים ולומדים.</p>' +
+      '<div class="btn-row"><a class="btn" href="#feed">לגלול בפיד</a><a class="btn gold" href="#blitz">' + ICON.bolt.replace('<svg', '<svg class="btn-ic"') + 'סבב בזק</a></div>' +
+    '</section>';
+  }
+
+  /* ================= blitz: 60 seconds of myth or fact ================= */
+  const BLITZ_MS = 60000;
+  let blitz = null;
+
+  function viewBlitz() {
+    blitz = null;
+    render(backLink('#feed', 'לפיד') +
+      '<section class="card result blitz-intro"><span class="promo-ic">' + ICON.bolt + '</span>' +
+      '<h1>סבב בזק</h1><p>60 שניות. בכל מסך משפט אחד: עובדה או מיתוס? כל תשובה נכונה היא נקודה. טעות עולה 3 שניות.</p>' +
+      '<p class="muted">השיא שלכם: <span class="num">' + (state.blitz.best || 0) + '</span></p>' +
+      '<button type="button" class="btn gold big block" id="blitz-go">יאללה, מתחילים</button></section>',
+      'feed', 'סבב בזק');
+    document.getElementById('blitz-go').addEventListener('click', startBlitz);
+  }
+
+  function startBlitz() {
+    const pool = shuffle(FEED.filter(c => c.type === 'tf'));
+    blitz = { pool, i: 0, score: 0, wrong: 0, end: performance.now() + BLITZ_MS, raf: null, lock: false, missed: [] };
+    sfx('tick');
+    drawBlitz();
+  }
+
+  function drawBlitz(flash) {
+    const b = blitz;
+    const c = b.pool[b.i % b.pool.length];
+    render('<div class="blitz">' +
+      '<div class="blitz-top"><span class="chip streak num" id="bz-score">' + ICON.bolt + '<span>' + b.score + '</span></span><span class="num bz-sec" id="bz-sec">60</span></div>' +
+      '<div class="qprog bz-bar"><span id="bz-bar" style="width:100%"></span></div>' +
+      '<p class="fstatement bz-st' + (flash ? ' ' + flash : '') + '">' + esc(c.text) + '</p>' +
+      '<div class="tf-btns"><button type="button" class="btn big" data-bz="1">עובדה</button><button type="button" class="btn big alt" data-bz="0">מיתוס</button></div>' +
+      '</div>', 'feed', 'סבב בזק');
+    view.querySelectorAll('[data-bz]').forEach(btn => btn.addEventListener('click', () => answerBlitz(btn.dataset.bz === '1')));
+    tickBlitz();
+  }
+
+  function tickBlitz() {
+    const b = blitz;
+    if (!b) return;
+    const left = Math.max(0, b.end - performance.now());
+    const sec = document.getElementById('bz-sec');
+    const bar = document.getElementById('bz-bar');
+    if (sec) sec.textContent = Math.ceil(left / 1000);
+    if (bar) bar.style.width = (left / BLITZ_MS * 100) + '%';
+    if (left <= 0) return finishBlitz();
+    if (location.hash !== '#blitz') { blitz = null; return; }
+    b.raf = requestAnimationFrame(tickBlitz);
+  }
+
+  function answerBlitz(v) {
+    const b = blitz;
+    if (!b || b.lock) return;
+    const c = b.pool[b.i % b.pool.length];
+    const ok = v === c.truth;
+    if (ok) { b.score++; sfx('right'); buzz(15); }
+    else { b.wrong++; b.end -= 3000; b.missed.push(c); sfx('wrong'); buzz([40, 40]); }
+    b.i++;
+    b.lock = true;
+    const st = view.querySelector('.bz-st');
+    if (st) { st.classList.add(ok ? 'ok' : 'bad'); st.textContent = ok ? 'נכון!' : (c.truth ? 'זו עובדה' : 'זה מיתוס'); }
+    if (b.raf) cancelAnimationFrame(b.raf);
+    setTimeout(() => { if (blitz !== b) return; b.lock = false; if (b.end - performance.now() <= 0) finishBlitz(); else drawBlitz(); }, ok ? 280 : 750);
+  }
+
+  function finishBlitz() {
+    const b = blitz;
+    if (!b || b.done) return;
+    b.done = true;
+    if (b.raf) cancelAnimationFrame(b.raf);
+    const prevBest = state.blitz.best || 0;
+    const res = award(() => {
+      state.blitz = { best: Math.max(prevBest, b.score), days: (state.blitz.days || []).slice() };
+      if (!state.blitz.days.includes(today())) state.blitz.days.push(today());
+      markActive();
+    });
+    const record = b.score > prevBest;
+    const missed = b.missed.slice(-5).map(c => '<li class="w">' + ICON.cross + '<span><strong>' + esc(c.text) + '</strong><br><span class="muted">' + (c.truth ? 'עובדה. ' : 'מיתוס. ') + esc(c.explain) + '</span></span></li>').join('');
+    render('<section class="card result"><span class="eyebrow">סבב בזק</span>' +
+      '<div class="score num">' + b.score + '</div>' +
+      '<p>' + (record ? 'שיא חדש!' : 'השיא שלכם: <span class="num">' + prevBest + '</span>') + '</p>' +
+      '<div class="xpgain"><bdi dir="ltr" class="num">+' + res.gained + ' XP</bdi></div>' +
+      (res.gained ? '' : '<p class="muted small">XP בסבב בזק ניתן על שיא חדש ועל היום הראשון ששיחקתם בו.</p>') +
+      '</section>' +
+      '<div class="btn-row"><button type="button" class="btn gold" id="bz-again">עוד סבב</button><a class="btn secondary" href="#feed">חזרה לפיד</a></div>' +
+      (missed ? '<section class="section"><h2>מה פספסתם</h2><ul class="recap">' + missed + '</ul></section>' : ''),
+      'feed', 'תוצאה');
+    document.getElementById('bz-again').addEventListener('click', startBlitz);
+    if (res.levelUp) celebrate(res, false);
+    else { sfx('done'); celebrate(res); if (record && b.score > 0) confetti(); }
+  }
+
   /* ================= router ================= */
   function route() {
     const h = (location.hash || '').replace(/^#/, '');
@@ -988,6 +1293,9 @@
     if (h === '' || h === 'home') return viewHome();
     if (h === 'lessons') return viewLessons();
     if (h === 'progress') return viewProgress();
+    if (h === 'feed') return viewFeed();
+    if (h === 'saved') return viewSaved();
+    if (h === 'blitz') return viewBlitz();
     if (h === 'final') return startQuiz('final', 0);
     if ((m = h.match(/^lesson-(\d+)(-ex)?$/))) return viewLesson(Number(m[1]), !!m[2]);
     if ((m = h.match(/^quiz-(\d+)$/)) && lesson(Number(m[1]))) return startQuiz('lesson', Number(m[1]));
