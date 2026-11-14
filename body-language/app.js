@@ -15,16 +15,18 @@
   document.documentElement.lang = 'he';
   document.documentElement.dir = 'rtl';
 
-  /* ---------------- storage ---------------- */
+  /* ================= storage ================= */
   function blankState() {
-    return { v: 1, lessons: {}, reviews: {}, final: null, days: [], exercises: {}, previewAll: false };
+    return {
+      v: 1, lessons: {}, reviews: {}, final: null, days: [], exercises: {}, read: {},
+      seenBadges: [], sound: true, previewAll: false, installHidden: false
+    };
   }
   function load() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (!raw) return blankState();
-      const s = JSON.parse(raw);
-      return Object.assign(blankState(), s);
+      return Object.assign(blankState(), JSON.parse(raw));
     } catch (e) {
       return blankState();
     }
@@ -40,18 +42,14 @@
     }
   }
 
-  /* ---------------- dates ---------------- */
+  /* ================= dates ================= */
   function keyOf(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return y + '-' + m + '-' + day;
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
   function today() { return keyOf(new Date()); }
   function addDays(key, n) {
     const [y, m, d] = key.split('-').map(Number);
-    const dt = new Date(y, m - 1, d + n);
-    return keyOf(dt);
+    return keyOf(new Date(y, m - 1, d + n));
   }
   function hoursToMidnight() {
     const now = new Date();
@@ -63,14 +61,15 @@
     if (!state.days.includes(t)) state.days.push(t);
     state.days.sort();
   }
-  function streaks() {
-    const set = new Set(state.days);
+  function streaks(s) {
+    s = s || state;
+    const set = new Set(s.days);
     let cur = 0;
     let d = today();
     if (!set.has(d)) d = addDays(d, -1);
     while (set.has(d)) { cur++; d = addDays(d, -1); }
     let best = 0, run = 0, prev = null;
-    state.days.forEach(k => {
+    s.days.forEach(k => {
       run = prev && addDays(prev, 1) === k ? run + 1 : 1;
       best = Math.max(best, run);
       prev = k;
@@ -78,7 +77,7 @@
     return { cur, best, activeToday: set.has(today()) };
   }
 
-  /* ---------------- progress rules ---------------- */
+  /* ================= progress rules ================= */
   function lessonRec(n) { return state.lessons[n] || null; }
   // A lesson opens the calendar day after the previous one was completed.
   function lessonStatus(n) {
@@ -95,8 +94,7 @@
   function doneCount() { return Object.keys(state.lessons).length; }
   function reviewStatus(w) {
     if (state.reviews[w]) return 'done';
-    const wk = WEEKS[w - 1];
-    if (state.previewAll || lessonRec(wk.to)) return 'open';
+    if (state.previewAll || lessonRec(WEEKS[w - 1].to)) return 'open';
     return 'locked';
   }
   function finalStatus() {
@@ -106,21 +104,221 @@
   }
   function weekOf(n) { return n <= 28 ? Math.ceil(n / 7) : 5; }
 
-  function recordResult(kind, id, score, total) {
-    const t = today();
-    let bucket;
-    if (kind === 'lesson') bucket = state.lessons;
-    else if (kind === 'review') bucket = state.reviews;
-    const prev = kind === 'final' ? state.final : bucket[id];
-    const rec = prev
-      ? Object.assign({}, prev, { last: score, best: Math.max(prev.best, score), attempts: prev.attempts + 1, total })
-      : { done: t, first: score, last: score, best: score, attempts: 1, total };
-    if (kind === 'final') state.final = rec; else bucket[id] = rec;
-    markActive();
-    save();
+  /* ================= game: XP, levels, badges ================= */
+  const XP = { lesson: 20, perQ: 10, perfect: 15, review: 30, reviewPerfect: 30, final: 50, finalPerfect: 50, exercise: 15, streakDay: 5 };
+  const LEVELS = [
+    { xp: 0, name: 'מתבונן מתחיל' },
+    { xp: 100, name: 'שם לב' },
+    { xp: 250, name: 'מכיר קו בסיס' },
+    { xp: 450, name: 'צייד צבירים' },
+    { xp: 700, name: 'מקשיב פעיל' },
+    { xp: 1000, name: 'שואל שאלות טובות' },
+    { xp: 1400, name: 'מספר סיפורים' },
+    { xp: 1900, name: 'נוכחות מלאה' },
+    { xp: 2500, name: 'קורא אנשים' },
+    { xp: 3100, name: 'אמן הסבירות' }
+  ];
+
+  function computeXP(s) {
+    let xp = 0;
+    Object.values(s.lessons).forEach(r => { xp += XP.lesson + r.best * XP.perQ + (r.best === 3 ? XP.perfect : 0); });
+    Object.values(s.reviews).forEach(r => { xp += XP.review + r.best * XP.perQ + (r.best === r.total ? XP.reviewPerfect : 0); });
+    if (s.final) xp += XP.final + s.final.best * XP.perQ + (s.final.best === s.final.total ? XP.finalPerfect : 0);
+    xp += Object.keys(s.exercises).length * XP.exercise;
+    xp += streaks(s).best * XP.streakDay;
+    return xp;
+  }
+  function levelInfo(xp) {
+    let i = 0;
+    while (i + 1 < LEVELS.length && xp >= LEVELS[i + 1].xp) i++;
+    const cur = LEVELS[i], nxt = LEVELS[i + 1];
+    return {
+      n: i + 1, name: cur.name, xp, floor: cur.xp,
+      next: nxt ? nxt.xp : null,
+      pct: nxt ? (xp - cur.xp) / (nxt.xp - cur.xp) : 1
+    };
   }
 
-  /* ---------------- helpers ---------------- */
+  const BADGES = [
+    { id: 'first', icon: 'eye', name: 'צעד ראשון', desc: 'סיימתם את השיעור הראשון', test: c => c.done >= 1 },
+    { id: 'perfect', icon: 'star', name: 'בול', desc: 'מבחן שיעור בלי אף טעות', test: c => c.perfects >= 1 },
+    { id: 'perfect5', icon: 'star', name: 'חד עין', desc: '5 מבחני שיעור מושלמים', test: c => c.perfects >= 5 },
+    { id: 'streak3', icon: 'flame', name: 'שלושה ברצף', desc: 'רצף של 3 ימי לימוד', test: c => c.bestStreak >= 3 },
+    { id: 'streak7', icon: 'flame', name: 'שבוע שלם', desc: 'רצף של 7 ימי לימוד', test: c => c.bestStreak >= 7 },
+    { id: 'streak14', icon: 'flame', name: 'בלי הפסקה', desc: 'רצף של 14 ימי לימוד', test: c => c.bestStreak >= 14 },
+    { id: 'doer', icon: 'check', name: 'עושים, לא רק קוראים', desc: '5 תרגילים בחיים האמיתיים', test: c => c.ex >= 5 },
+    { id: 'doer15', icon: 'check', name: 'מתרגלים ברצינות', desc: '15 תרגילים בחיים האמיתיים', test: c => c.ex >= 15 },
+    { id: 'myth', icon: 'shield', name: 'שוברי מיתוסים', desc: '3 מתוך 3 בשיעור על מיתוסי השקר', test: c => c.s.lessons[13] && c.s.lessons[13].best === 3 },
+    { id: 'truth', icon: 'shield', name: 'בודקי עובדות', desc: '3 מתוך 3 בשיעור "איך לברר אמת"', test: c => c.s.lessons[14] && c.s.lessons[14].best === 3 },
+    { id: 'comeback', icon: 'up', name: 'לא מוותרים', desc: 'שיפרתם ציון בניסיון חוזר', test: c => c.comeback },
+    { id: 'review1', icon: 'trophy', name: 'חזרה ראשונה', desc: 'סיימתם מבחן חזרה שבועי', test: c => c.reviews >= 1 },
+    { id: 'reviews', icon: 'trophy', name: 'ארבעה שבועות', desc: 'סיימתם את כל ארבעת מבחני החזרה', test: c => c.reviews >= 4 },
+    { id: 'half', icon: 'flag', name: 'חצי דרך', desc: '15 שיעורים מאחוריכם', test: c => c.done >= 15 },
+    { id: 'grad', icon: 'crown', name: 'בוגרי המסלול', desc: 'כל 30 השיעורים', test: c => c.done >= 30 },
+    { id: 'master', icon: 'crown', name: 'אמני הסבירות', desc: '10 ומעלה במבחן המסכם', test: c => c.s.final && c.s.final.best >= 10 }
+  ];
+  function earnedBadges(s) {
+    s = s || state;
+    const recs = Object.values(s.lessons);
+    const c = {
+      s,
+      done: recs.length,
+      perfects: recs.filter(r => r.best === 3).length,
+      bestStreak: streaks(s).best,
+      ex: Object.keys(s.exercises).length,
+      reviews: Object.keys(s.reviews).length,
+      comeback: recs.concat(Object.values(s.reviews), s.final ? [s.final] : []).some(r => r.best > r.first)
+    };
+    return BADGES.filter(b => b.test(c)).map(b => b.id);
+  }
+
+  // Run a state change and report what the player gained.
+  function award(change) {
+    const xpBefore = computeXP(state);
+    const lvlBefore = levelInfo(xpBefore);
+    change();
+    save();
+    const xpAfter = computeXP(state);
+    const lvlAfter = levelInfo(xpAfter);
+    const earned = earnedBadges();
+    const fresh = earned.filter(id => !state.seenBadges.includes(id));
+    if (fresh.length) { state.seenBadges = state.seenBadges.concat(fresh); save(); }
+    return {
+      gained: xpAfter - xpBefore, xpBefore, xpAfter, lvlBefore, lvlAfter,
+      levelUp: lvlAfter.n > lvlBefore.n,
+      badges: fresh.map(id => BADGES.find(b => b.id === id))
+    };
+  }
+
+  function recordResult(kind, id, score, total) {
+    return award(() => {
+      const t = today();
+      const bucket = kind === 'lesson' ? state.lessons : kind === 'review' ? state.reviews : null;
+      const prev = kind === 'final' ? state.final : bucket[id];
+      const rec = prev
+        ? Object.assign({}, prev, { last: score, best: Math.max(prev.best, score), attempts: prev.attempts + 1, total })
+        : { done: t, first: score, last: score, best: score, attempts: 1, total };
+      if (kind === 'final') state.final = rec; else bucket[id] = rec;
+      markActive();
+    });
+  }
+
+  /* ================= sound, haptics, confetti, toasts ================= */
+  let actx = null;
+  function tone(freq, t0, dur, type, vol) {
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t0);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol || 0.08, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(actx.destination);
+    o.start(t0);
+    o.stop(t0 + dur + 0.02);
+  }
+  function sfx(name) {
+    if (!state.sound) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state === 'suspended') actx.resume();
+      const t = actx.currentTime + 0.01;
+      if (name === 'right') { tone(660, t, 0.12); tone(990, t + 0.09, 0.2); }
+      else if (name === 'wrong') { tone(240, t, 0.18, 'triangle', 0.07); tone(190, t + 0.12, 0.25, 'triangle', 0.06); }
+      else if (name === 'done') [523, 659, 784, 1047].forEach((f, i) => tone(f, t + i * 0.09, 0.22));
+      else if (name === 'level') [392, 523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, t + i * 0.08, 0.28, 'triangle', 0.07));
+      else if (name === 'tick') tone(880, t, 0.06, 'sine', 0.04);
+    } catch (e) { /* sound is optional */ }
+  }
+  function buzz(pattern) {
+    try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) { /* optional */ }
+  }
+  const reduceMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function confetti() {
+    if (reduceMotion()) return;
+    const c = document.createElement('canvas');
+    c.className = 'confetti';
+    c.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(c);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const W = window.innerWidth, H = window.innerHeight;
+    c.width = W * dpr; c.height = H * dpr;
+    const ctx = c.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const cs = getComputedStyle(document.documentElement);
+    const colors = ['--accent', '--gold', '--good', '--amber'].map(v => cs.getPropertyValue(v).trim() || '#0B6E63');
+    const parts = Array.from({ length: 120 }, () => ({
+      x: W / 2 + (Math.random() - 0.5) * W * 0.4, y: H * 0.3,
+      vx: (Math.random() - 0.5) * 10, vy: -Math.random() * 12 - 4,
+      r: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.3,
+      w: 6 + Math.random() * 6, h: 8 + Math.random() * 8,
+      c: colors[Math.floor(Math.random() * colors.length)]
+    }));
+    const start = performance.now();
+    function frame(now) {
+      const el = now - start;
+      ctx.clearRect(0, 0, W, H);
+      parts.forEach(p => {
+        p.vy += 0.35; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.r);
+        ctx.globalAlpha = Math.max(0, 1 - el / 2000);
+        ctx.fillStyle = p.c;
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h * Math.abs(Math.cos(p.r * 2)) + 2);
+        ctx.restore();
+      });
+      if (el < 2000) requestAnimationFrame(frame); else c.remove();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function toast(html) {
+    let wrap = document.getElementById('toasts');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'toasts';
+      wrap.className = 'toasts';
+      wrap.setAttribute('role', 'status');
+      document.body.appendChild(wrap);
+    }
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.innerHTML = html;
+    wrap.appendChild(t);
+    setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 400); }, 3000);
+  }
+  function celebrate(res, quiet) {
+    if (res.levelUp) {
+      sfx('level'); buzz([30, 40, 30, 40, 60]); confetti();
+      toast(medal(res.lvlAfter.n, 'sm') + '<span><strong>עליתם לרמה ' + res.lvlAfter.n + '</strong><br>' + esc(res.lvlAfter.name) + '</span>');
+    }
+    res.badges.forEach(b => {
+      if (!quiet) toast(badgeIcon(b, false, 'sm') + '<span><strong>הישג חדש: ' + esc(b.name) + '</strong><br>' + esc(b.desc) + '</span>');
+    });
+  }
+
+  /* ================= install (PWA) ================= */
+  let installEvent = null;
+  window.addEventListener('beforeinstallprompt', e => {
+    e.preventDefault();
+    installEvent = e;
+    const h = location.hash;
+    if (h === '' || h === '#home' || h === '#progress') route();
+  });
+  window.addEventListener('appinstalled', () => { installEvent = null; });
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  }
+  function isIOS() {
+    return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* not available here */ });
+  }
+
+  /* ================= helpers & icons ================= */
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
@@ -140,8 +338,36 @@
     check: '<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 10 17l9-10"/></svg>',
     cross: '<svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
     back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
-    mark: '<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="var(--accent)"/><path d="M7 17.5c2.6-4.4 5.6-6.5 9-6.5s6.4 2.1 9 6.5" fill="none" stroke="var(--on-accent)" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="18" r="3.2" fill="var(--on-accent)"/></svg>'
+    mark: '<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="var(--accent)"/><path d="M7 17.5c2.6-4.4 5.6-6.5 9-6.5s6.4 2.1 9 6.5" fill="none" stroke="var(--on-accent)" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="18" r="3.2" fill="var(--on-accent)"/></svg>',
+    star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z"/></svg>'
   };
+  const GLYPH = {
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+    star: '<path d="M12 3.5l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.8l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
+    flame: '<path d="M12 3c.5 2.6-1.2 4.1-2.5 5.6C8.2 10 7.3 11.5 7.3 13.5 7.3 16.5 9.4 19 12 19s4.7-2.3 4.7-5.4c0-2-.9-3.5-2-4.5.1 1.4-.4 2.5-1.4 2.9.3-3.1-.5-6.1-1.3-8z"/>',
+    check: '<path d="M5 12.5 10 17l9-10"/>',
+    shield: '<path d="M12 3l7 3v5.5c0 4.3-3 7.7-7 9.5-4-1.8-7-5.2-7-9.5V6z"/><path d="M9 12l2 2 4-4"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7"/>',
+    flag: '<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>',
+    crown: '<path d="M4 8l4 4 4-7 4 7 4-4-2 10H6z"/>'
+  };
+  function badgeIcon(b, locked, size) {
+    return '<span class="badge-ic' + (locked ? ' locked' : '') + (size ? ' ' + size : '') + '"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH[b.icon] + '</svg></span>';
+  }
+  function medal(n, size) {
+    return '<span class="medal' + (size ? ' ' + size : '') + '" aria-hidden="true"><span class="num">' + n + '</span></span>';
+  }
+  function stars(k, cls) {
+    let h = '<span class="stars ' + (cls || '') + '" aria-label="' + k + ' כוכבים מתוך 3">';
+    for (let i = 0; i < 3; i++) h += '<i class="' + (i < k ? 'on' : '') + '">' + ICON.star + '</i>';
+    return h + '</span>';
+  }
+  function starsFor(score, total) {
+    if (score === total) return 3;
+    if (score / total >= 0.6) return 2;
+    return score > 0 ? 1 : 0;
+  }
 
   const view = document.getElementById('view');
   function setTab(name) {
@@ -161,17 +387,30 @@
     return '<a class="back" href="' + href + '">' + ICON.back + esc(label) + '</a>';
   }
 
-  /* ---------------- home ---------------- */
+  /* ================= home ================= */
   function streakChip() {
     const s = streaks();
     if (!s.cur) return '';
-    const label = s.cur === 1 ? 'יום אחד ברצף' : s.cur + ' ימים ברצף';
-    return '<span class="chip streak" title="רצף ימי לימוד">' + ICON.flame + '<span class="num">' + label + '</span></span>';
+    const label = s.cur === 1 ? 'יום 1' : s.cur + ' ימים';
+    return '<span class="chip streak' + (s.activeToday ? '' : ' cold') + '" title="רצף ימי לימוד">' + ICON.flame + '<span class="num">' + label + '</span></span>';
+  }
+
+  function playerCard(link) {
+    const L = levelInfo(computeXP(state));
+    const badges = earnedBadges().length;
+    const toNext = L.next === null ? 'הגעתם לרמה הגבוהה ביותר' : 'עוד <bdi dir="ltr">' + (L.next - L.xp) + ' XP</bdi> לרמה ' + (L.n + 1);
+    return '<' + (link ? 'a href="#progress"' : 'section') + ' class="player" aria-label="רמה ' + L.n + ', ' + L.xp + ' נקודות ניסיון">' +
+      medal(L.n) +
+      '<span class="pinfo"><span class="pname">' + esc(L.name) + '</span>' +
+        '<span class="xpbar"><span class="fill" style="width:' + Math.round(L.pct * 100) + '%"></span></span>' +
+        '<span class="pmeta"><bdi dir="ltr" class="num">' + L.xp + ' XP</bdi><span>' + toNext + '</span></span></span>' +
+      '<span class="pbadges" title="הישגים"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.trophy + '</svg><span class="num">' + badges + '</span></span>' +
+    '</' + (link ? 'a' : 'section') + '>';
   }
 
   function scaleBlock() {
     return '<section class="card" aria-labelledby="scale-h">' +
-      '<h2 id="scale-h">סבירות, לא ודאות</h2>' +
+      '<h2 id="scale-h">כלל המשחק: סבירות, לא ודאות</h2>' +
       '<div class="scale">' +
         '<div class="scale-wrap"><div class="scale-bar" role="img" aria-label="סרגל סבירות: סימנים מזיזים את המחוג לכיוון סביר, אבל לא מגיעים לוודאות"></div><div class="scale-needle"></div></div>' +
         '<div class="scale-labels"><span>ניחוש</span><span>סביר</span><span class="off">ודאות</span></div>' +
@@ -180,23 +419,60 @@
     '</section>';
   }
 
-  function trackBlock() {
+  function questLesson() {
+    const t = today();
+    const doneToday = Object.keys(state.lessons).map(Number).filter(n => state.lessons[n].done === t);
+    if (doneToday.length) return Math.max.apply(null, doneToday);
     const next = nextLessonN();
-    let cells = '';
-    for (let n = 1; n <= TOTAL; n++) {
-      const cls = lessonRec(n) ? 'done' : (n === next && lessonStatus(n) === 'open' ? 'now' : '');
-      cells += '<span class="' + cls + '" title="שיעור ' + n + '"></span>';
-    }
-    return '<section class="track" aria-label="מסלול 30 השיעורים">' +
-      '<div class="track-head"><h2>המסלול</h2><span class="muted small num">' + doneCount() + ' מתוך ' + TOTAL + ' שיעורים</span></div>' +
-      '<div class="cells">' + cells + '</div>' +
+    return next && lessonStatus(next) === 'open' ? next : null;
+  }
+  function questsBlock() {
+    const n = questLesson();
+    if (!n) return '';
+    const L = lesson(n);
+    const q = [
+      { done: !!state.read[n], label: 'לקרוא את השיעור', xp: null, href: '#lesson-' + n },
+      { done: !!lessonRec(n), label: 'לעבור את המבחן', xp: '+' + (XP.lesson + 3 * XP.perQ + XP.perfect), href: '#quiz-' + n },
+      { done: !!state.exercises[n], label: 'לעשות את התרגיל בחיים', xp: '+' + XP.exercise, href: '#lesson-' + n + '-ex' }
+    ];
+    const count = q.filter(x => x.done).length;
+    return '<section class="card quests" aria-labelledby="quests-h">' +
+      '<div class="quests-head"><h2 id="quests-h">המשימות של היום</h2><span class="chip' + (count === 3 ? ' ok' : '') + ' num">' + count + '/3</span></div>' +
+      '<p class="muted small">שיעור ' + n + ': ' + esc(L.title) + '</p>' +
+      '<ul class="qlist">' + q.map(x =>
+        '<li class="' + (x.done ? 'done' : '') + '"><a href="' + x.href + '"><span class="qbox">' + (x.done ? ICON.check : '') + '</span>' +
+        '<span class="qlabel">' + x.label + '</span>' + (x.xp ? '<span class="qxp num">' + (x.done ? '' : 'עד ') + '<bdi dir="ltr">' + x.xp + ' XP</bdi></span>' : '') + '</a></li>'
+      ).join('') + '</ul>' +
+      (count === 3 ? '<p class="small"><strong>כל המשימות הושלמו.</strong> נתראה מחר עם שלב חדש.</p>' : '') +
     '</section>';
   }
 
   function pendingReviews() {
-    const out = [];
-    WEEKS.forEach(wk => { if (reviewStatus(wk.w) === 'open') out.push(wk.w); });
-    return out;
+    return WEEKS.filter(wk => reviewStatus(wk.w) === 'open').map(wk => wk.w);
+  }
+
+  function installBanner() {
+    if (isStandalone() || state.installHidden) return '';
+    if (!installEvent && !isIOS()) return '';
+    return '<section class="card install-card">' +
+      '<h2>להתקין כאפליקציה</h2>' +
+      '<p class="small">אייקון במסך הבית, מסך מלא, ועובד גם בלי אינטרנט.</p>' +
+      (installEvent
+        ? '<div class="btn-row"><button type="button" class="btn" id="install-btn">להתקין</button><button type="button" class="btn secondary" id="install-hide">אחר כך</button></div>'
+        : '<p class="small">בספארי: לחצו על כפתור השיתוף <b>(ריבוע עם חץ למעלה)</b>, ואז <b>"הוספה למסך הבית"</b>.</p><button type="button" class="btn secondary" id="install-hide">הבנתי</button>') +
+    '</section>';
+  }
+  function bindInstall() {
+    const b = document.getElementById('install-btn');
+    if (b) b.addEventListener('click', async () => {
+      if (!installEvent) return;
+      installEvent.prompt();
+      try { await installEvent.userChoice; } catch (e) { /* ignore */ }
+      installEvent = null;
+      route();
+    });
+    const h = document.getElementById('install-hide');
+    if (h) h.addEventListener('click', () => { state.installHidden = true; save(); route(); });
   }
 
   function viewHome() {
@@ -205,13 +481,10 @@
     if (next === null) {
       todayCard = '<section class="today done">' +
         '<div class="bignum">30<small>מתוך 30</small></div>' +
-        '<div class="body"><span class="eyebrow">סיימתם את המסלול</span><h1>כל 30 השיעורים מאחוריכם</h1>' +
-        '<p class="muted">מה שנשאר זה תרגול. אפשר לחזור לכל שיעור, ולנסות את המבחן המסכם.</p></div>' +
+        '<div class="body"><span class="eyebrow">סיימתם את המסלול</span><h1>כל 30 השלבים מאחוריכם</h1>' +
+        '<p class="muted">מה שנשאר זה תרגול. אפשר לחזור לכל שיעור ולשפר כוכבים, ולנסות את המבחן המסכם.</p></div>' +
         '<div class="actions">' +
-          (finalStatus() === 'done'
-            ? '<a class="btn" href="#final">לנסות שוב את המבחן המסכם</a>'
-            : '<a class="btn" href="#final">למבחן המסכם: 12 שאלות</a>') +
-          '<a class="btn secondary" href="#progress">לראות את ההתקדמות</a>' +
+          '<a class="btn block" href="#final">' + (finalStatus() === 'done' ? 'לנסות שוב את המבחן המסכם' : 'למבחן המסכם: 12 שאלות') + '</a>' +
         '</div></section>';
     } else {
       const L = lesson(next);
@@ -219,186 +492,205 @@
       if (st === 'open') {
         todayCard = '<section class="today">' +
           '<div class="bignum">' + next + '<small>מתוך 30</small></div>' +
-          '<div class="body"><span class="eyebrow">שיעור היום · שבוע ' + weekOf(next) + '</span><h1>' + esc(L.title) + '</h1>' +
+          '<div class="body"><span class="eyebrow">השלב של היום · שבוע ' + weekOf(next) + '</span><h1>' + esc(L.title) + '</h1>' +
           '<p class="muted">' + esc(L.tag) + '</p></div>' +
-          '<div class="actions"><a class="btn block" href="#lesson-' + next + '">להתחיל את השיעור</a>' +
-          '<span class="muted small" style="text-align:center">כחמש דקות קריאה, ואחריהן מבחן של 3 שאלות</span></div>' +
+          '<div class="actions"><a class="btn block big" href="#lesson-' + next + '">לשחק את השלב</a>' +
+          '<span class="muted small center">חמש דקות קריאה ו-3 שאלות · עד <bdi dir="ltr">' + (XP.lesson + 3 * XP.perQ + XP.perfect) + ' XP</bdi></span></div>' +
         '</section>';
       } else {
         const h = hoursToMidnight();
         const when = h <= 1 ? 'בעוד פחות משעה' : 'בעוד ' + h + ' שעות';
-        const prev = lesson(next - 1);
         todayCard = '<section class="today done">' +
           '<div class="bignum">' + (next - 1) + '<small>הושלם</small></div>' +
-          '<div class="body"><span class="eyebrow">סיימתם להיום</span><h1>מחר: ' + esc(L.title) + '</h1>' +
-          '<p class="muted">השיעור הבא ייפתח בחצות, ' + when + '. בינתיים, התרגיל של היום מחכה לכם בחוץ.</p></div>' +
-          '<div class="actions"><a class="btn secondary block" href="#lesson-' + prev.n + '">לחזור לתרגיל: ' + esc(prev.title) + '</a></div>' +
+          '<div class="body"><span class="eyebrow">סיימתם את השלב של היום</span><h1>מחר: ' + esc(L.title) + '</h1>' +
+          '<p class="muted">השלב הבא ייפתח בחצות, ' + when + '. אל תשברו את הרצף.</p></div>' +
         '</section>';
       }
     }
 
     const reviews = pendingReviews().map(w =>
       '<section class="card review-card">' +
-        '<span class="eyebrow">מבחן חזרה · שבוע ' + w + '</span>' +
+        '<span class="eyebrow">שלב בונוס · מבחן חזרה שבוע ' + w + '</span>' +
         '<h2>7 שאלות על שיעורים ' + WEEKS[w - 1].from + '–' + WEEKS[w - 1].to + '</h2>' +
-        '<p class="small">שאלה אחת מכל שיעור בשבוע, בסדר מעורבב. זה הזמן לבדוק מה נשאר.</p>' +
-        '<a class="btn" href="#review-' + w + '">להתחיל את מבחן החזרה</a>' +
+        '<p class="small">שאלה אחת מכל שיעור בשבוע, בסדר מעורבב. עד <bdi dir="ltr">' + (XP.review + 7 * XP.perQ + XP.reviewPerfect) + ' XP</bdi>.</p>' +
+        '<a class="btn gold" href="#review-' + w + '">להתחיל את מבחן החזרה</a>' +
       '</section>').join('');
 
     const notice = storageOk ? '' : '<p class="card small">הדפדפן לא מאפשר לשמור נתונים, ולכן ההתקדמות לא תישמר אחרי סגירת הדף.</p>';
 
     render(
       '<div class="topline"><div class="brand">' + ICON.mark + '<span>שפת גוף ב-30 יום</span></div>' + streakChip() + '</div>' +
-      todayCard + reviews + trackBlock() + scaleBlock() + notice,
+      playerCard(true) + todayCard + questsBlock() + reviews + installBanner() + scaleBlock() + notice,
       'home'
     );
+    bindInstall();
   }
 
-  /* ---------------- lessons list ---------------- */
-  function lessonRow(n) {
-    const L = lesson(n);
-    const st = lessonStatus(n);
-    const rec = lessonRec(n);
-    let end = '';
-    if (st === 'done') end = '<span class="chip ok num">' + rec.best + '/3</span>';
-    else if (st === 'open') end = '<span class="chip accent">' + (n === nextLessonN() ? 'היום' : 'פתוח') + '</span>';
-    else if (st === 'tomorrow') end = '<span class="chip">מחר</span>';
-    else end = ICON.lock;
-    const cls = 'row is-' + (st === 'tomorrow' ? 'locked' : st);
-    const inner = '<span class="n">' + n + '</span><span class="t"><strong>' + esc(L.title) + '</strong><span>' + esc(L.tag) + '</span></span>' + end;
-    if (st === 'done' || st === 'open') return '<li><a class="' + cls + '" href="#lesson-' + n + '">' + inner + '</a></li>';
-    return '<li><div class="' + cls + '" aria-disabled="true">' + inner + '</div></li>';
+  /* ================= map ================= */
+  const MAP_GROUPS = [
+    { title: 'שבוע 1', sub: 'לקרוא נכון', from: 1, to: 7, w: 1 },
+    { title: 'שבוע 2', sub: 'להקשיב ולברר', from: 8, to: 14, w: 2 },
+    { title: 'שבוע 3', sub: 'לשדר ולספר', from: 15, to: 21, w: 3 },
+    { title: 'שבוע 4', sub: 'אנשים ומצבים', from: 22, to: 28, w: 4 },
+    { title: 'הסיום', sub: 'כריזמה וסיכום', from: 29, to: 30, w: null }
+  ];
+  const ROW = 128;
+
+  function nodeHtml(it, x, y) {
+    let href = null, cls = 'node', disc = '', extra = '', label = '', aria = '';
+    if (it.type === 'lesson') {
+      const n = it.n, L = lesson(n), st = lessonStatus(n), rec = lessonRec(n);
+      label = L.title;
+      disc = '<span class="num">' + n + '</span>';
+      if (st === 'done') { cls += ' is-done'; href = '#lesson-' + n; extra = stars(starsFor(rec.best, 3), 'tiny'); aria = 'שלב ' + n + ': ' + L.title + ', הושלם, ' + rec.best + ' מתוך 3'; }
+      else if (st === 'open') { cls += ' is-open'; href = '#lesson-' + n; extra = '<span class="bubble">' + (n === nextLessonN() ? 'היום' : 'פתוח') + '</span>'; aria = 'שלב ' + n + ': ' + L.title + ', פתוח'; }
+      else { cls += ' is-locked'; disc = ICON.lock; aria = 'שלב ' + n + ': ' + L.title + ', ' + (st === 'tomorrow' ? 'נפתח מחר' : 'נעול'); if (st === 'tomorrow') extra = '<span class="bubble muted-b">מחר</span>'; }
+    } else {
+      const isFinal = it.type === 'final';
+      const st = isFinal ? finalStatus() : reviewStatus(it.w);
+      const rec = isFinal ? state.final : state.reviews[it.w];
+      cls += ' is-chest';
+      label = isFinal ? 'מבחן מסכם' : 'חזרה: שבוע ' + it.w;
+      disc = '<svg viewBox="0 0 24 24" aria-hidden="true">' + (isFinal ? GLYPH.crown : GLYPH.trophy) + '</svg>';
+      if (st === 'locked') { cls += ' is-locked'; aria = label + ', נעול'; }
+      else {
+        href = isFinal ? '#final' : '#review-' + it.w;
+        if (st === 'done') { cls += ' is-done'; extra = stars(starsFor(rec.best, rec.total), 'tiny'); aria = label + ', ' + rec.best + ' מתוך ' + rec.total; }
+        else { cls += ' is-open'; extra = '<span class="bubble gold-b">בונוס</span>'; aria = label + ', פתוח'; }
+      }
+    }
+    const style = 'left:' + x.toFixed(1) + '%;top:' + y + 'px';
+    const inner = '<span class="disc">' + disc + '</span>' + extra + '<span class="lbl">' + esc(label) + '</span>';
+    return href
+      ? '<a class="' + cls + '" href="' + href + '" style="' + style + '" aria-label="' + esc(aria) + '">' + inner + '</a>'
+      : '<div class="' + cls + '" style="' + style + '" role="img" aria-label="' + esc(aria) + '">' + inner + '</div>';
   }
-  function reviewRow(w) {
-    const st = reviewStatus(w);
-    const rec = state.reviews[w];
-    let end = st === 'done' ? '<span class="chip ok num">' + rec.best + '/' + rec.total + '</span>'
-      : st === 'open' ? '<span class="chip streak">מחכה</span>' : ICON.lock;
-    const inner = '<span class="n">' + w + '</span><span class="t"><strong>מבחן חזרה שבועי</strong><span>7 שאלות מכל שיעורי השבוע</span></span>' + end;
-    if (st === 'locked') return '<li><div class="row is-locked" aria-disabled="true">' + inner + '</div></li>';
-    return '<li><a class="row is-review" href="#review-' + w + '">' + inner + '</a></li>';
-  }
-  function finalRow() {
-    const st = finalStatus();
-    const rec = state.final;
-    let end = st === 'done' ? '<span class="chip ok num">' + rec.best + '/' + rec.total + '</span>'
-      : st === 'open' ? '<span class="chip streak">פתוח</span>' : ICON.lock;
-    const inner = '<span class="n">★</span><span class="t"><strong>מבחן מסכם</strong><span>12 שאלות מכל המסלול</span></span>' + end;
-    if (st === 'locked') return '<li><div class="row is-locked" aria-disabled="true">' + inner + '</div></li>';
-    return '<li><a class="row is-review" href="#final">' + inner + '</a></li>';
+
+  function mapSection(g, phase) {
+    const items = [];
+    for (let n = g.from; n <= g.to; n++) items.push({ type: 'lesson', n });
+    items.push(g.w ? { type: 'review', w: g.w } : { type: 'final' });
+    const pts = items.map((it, i) => ({ x: 50 + 24 * Math.sin((i + phase) * 1.1), y: 48 + i * ROW }));
+    const h = 48 + (items.length - 1) * ROW + 110;
+    const reached = it => it.type === 'lesson'
+      ? ['done', 'open'].includes(lessonStatus(it.n))
+      : (it.type === 'final' ? finalStatus() : reviewStatus(it.w)) !== 'locked';
+    let paths = '';
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const d = 'M' + a.x + ' ' + a.y + ' C' + a.x + ' ' + (a.y + ROW / 2) + ' ' + b.x + ' ' + (b.y - ROW / 2) + ' ' + b.x + ' ' + b.y;
+      paths += '<path d="' + d + '" class="' + (reached(items[i]) ? 'on' : '') + '" vector-effect="non-scaling-stroke"/>';
+    }
+    const doneN = items.filter(it => it.type === 'lesson' && lessonRec(it.n)).length;
+    const totalN = items.filter(it => it.type === 'lesson').length;
+    return '<section class="map-sec">' +
+      '<div class="map-banner"><div><h2>' + g.title + '</h2><span>' + g.sub + '</span></div><span class="chip num">' + doneN + '/' + totalN + '</span></div>' +
+      '<div class="map" style="height:' + h + 'px">' +
+        '<svg class="map-path" viewBox="0 0 100 ' + h + '" preserveAspectRatio="none" aria-hidden="true">' + paths + '</svg>' +
+        items.map((it, i) => nodeHtml(it, pts[i].x, pts[i].y)).join('') +
+      '</div></section>';
   }
 
   function viewLessons() {
-    const groups = [
-      { title: 'שבוע 1', sub: 'לקרוא נכון', from: 1, to: 7, w: 1 },
-      { title: 'שבוע 2', sub: 'להקשיב ולברר', from: 8, to: 14, w: 2 },
-      { title: 'שבוע 3', sub: 'לשדר ולספר', from: 15, to: 21, w: 3 },
-      { title: 'שבוע 4', sub: 'אנשים ומצבים', from: 22, to: 28, w: 4 },
-      { title: 'סיום', sub: 'כריזמה וסיכום', from: 29, to: 30, w: null }
-    ];
-    let html = '<div class="lesson-head"><h1>כל השיעורים</h1><p class="muted">שיעור חדש נפתח בכל יום, אחרי שמסיימים את המבחן של השיעור הקודם.</p></div>';
-    groups.forEach(g => {
-      let rows = '';
-      for (let n = g.from; n <= g.to; n++) rows += lessonRow(n);
-      rows += g.w ? reviewRow(g.w) : finalRow();
-      html += '<section class="week"><div class="week-head"><h2>' + g.title + '</h2><span class="muted small">' + g.sub + '</span></div><ul class="list">' + rows + '</ul></section>';
-    });
-    if (state.previewAll) html += '<p class="reminder">מצב תצוגה מקדימה פעיל: כל השיעורים פתוחים. אפשר לכבות אותו במסך ההתקדמות.</p>';
-    render(html, 'lessons', 'שיעורים');
+    let html = '<div class="lesson-head"><h1>המפה</h1><p class="muted">30 שלבים. שלב חדש נפתח בכל יום, אחרי שעוברים את המבחן של השלב הקודם. כוכבים: 3 מתוך 3 נכונות.</p></div>';
+    let phase = 0;
+    MAP_GROUPS.forEach(g => { html += mapSection(g, phase); phase += (g.to - g.from + 2); });
+    if (state.previewAll) html += '<p class="reminder">מצב תצוגה מקדימה פעיל: כל השלבים פתוחים. אפשר לכבות אותו בהגדרות.</p>';
+    render(html, 'lessons', 'המפה');
+    const target = view.querySelector('.node.is-open') || Array.from(view.querySelectorAll('.node.is-done')).pop();
+    if (target) target.scrollIntoView({ block: 'center' });
   }
 
-  /* ---------------- lesson ---------------- */
+  /* ================= lesson ================= */
   function viewLocked(msg) {
-    render(backLink('#lessons', 'כל השיעורים') +
-      '<section class="card empty">' + ICON.lock.replace('class="lock"', 'class="lock" style="width:40px;height:40px;margin:0 auto"') +
+    render(backLink('#lessons', 'למפה') +
+      '<section class="card empty">' + ICON.lock.replace('class="lock"', 'class="lock big-lock"') +
       '<h1>עוד לא פתוח</h1><p>' + msg + '</p><a class="btn" href="#home">לדף הבית</a></section>', 'lessons', 'נעול');
   }
 
-  function viewLesson(n) {
+  function viewLesson(n, focusEx) {
     const L = lesson(n);
     if (!L) return viewHome();
     const st = lessonStatus(n);
-    if (st === 'locked') return viewLocked('שיעור ' + n + ' ייפתח אחרי שתסיימו את השיעורים שלפניו, אחד בכל יום.');
-    if (st === 'tomorrow') return viewLocked('שיעור ' + n + ' ייפתח מחר. שיעור אחד ביום נותן זמן לתרגל את מה שלמדתם.');
+    if (st === 'locked') return viewLocked('שלב ' + n + ' ייפתח אחרי שתסיימו את השלבים שלפניו, אחד בכל יום.');
+    if (st === 'tomorrow') return viewLocked('שלב ' + n + ' ייפתח מחר. שלב אחד ביום נותן זמן לתרגל את מה שלמדתם.');
+    if (!state.read[n]) { state.read[n] = today(); save(); }
     const rec = lessonRec(n);
     const exDone = !!state.exercises[n];
-
     const list = items => '<ul>' + items.map(i => '<li>' + esc(i) + '</li>').join('') + '</ul>';
 
-    let html = backLink('#lessons', 'כל השיעורים') +
-      '<header class="lesson-head"><span class="eyebrow">יום ' + n + ' מתוך 30 · ' + (n <= 28 ? 'שבוע ' + weekOf(n) : 'סיום') + '</span>' +
-      '<h1>' + esc(L.title) + '</h1><p class="tag">' + esc(L.tag) + '</p></header>' +
+    let html = backLink('#lessons', 'למפה') +
+      '<header class="lesson-head"><span class="eyebrow">שלב ' + n + ' מתוך 30 · ' + (n <= 28 ? 'שבוע ' + weekOf(n) : 'הסיום') + '</span>' +
+      '<h1>' + esc(L.title) + '</h1><p class="tag">' + esc(L.tag) + '</p>' +
+      (rec ? '<div class="lesson-stars">' + stars(starsFor(rec.best, 3)) + '</div>' : '') + '</header>' +
 
       '<section class="section"><h2>הרעיון</h2><p>' + esc(L.idea) + '</p></section>' +
-
       '<section class="section"><h2>על מה להסתכל</h2><ul class="bullets">' + L.look.map(i => '<li>' + esc(i) + '</li>').join('') + '</ul></section>' +
-
       '<section class="section"><h2>מה זה אומר, ומה לא</h2><div class="pair">' +
         '<div class="yes"><h3>מה זה יכול לרמוז</h3>' + list(L.means) + '</div>' +
         '<div class="no"><h3>מה זה לא אומר</h3>' + list(L.not) + '</div>' +
       '</div></section>' +
-
       (L.science ? '<aside class="science"><span class="eyebrow">מה המחקר אומר</span><p>' + esc(L.science) + '</p></aside>' : '') +
-
       '<section class="section"><h2>דוגמה מהחיים</h2><blockquote class="example">' + esc(L.example) + '</blockquote></section>' +
 
-      '<section class="exercise" aria-labelledby="ex-h"><h2 id="ex-h">התרגיל להיום</h2><p>' + esc(L.exercise) + '</p>' +
-        '<label class="check" for="ex-' + n + '"><input type="checkbox" id="ex-' + n + '" data-ex="' + n + '"' + (exDone ? ' checked' : '') + '> עשיתי את התרגיל</label></section>' +
+      '<section class="exercise" id="exercise" aria-labelledby="ex-h"><div class="ex-head"><h2 id="ex-h">המשימה בחיים האמיתיים</h2><bdi dir="ltr" class="chip accent num">+' + XP.exercise + ' XP</bdi></div><p>' + esc(L.exercise) + '</p>' +
+        '<label class="check" for="ex-' + n + '"><input type="checkbox" id="ex-' + n + '" data-ex="' + n + '"' + (exDone ? ' checked' : '') + '> עשיתי את המשימה</label></section>' +
 
       (rec
-        ? '<div class="card"><p><strong>השלמתם את השיעור.</strong> הציון הכי טוב שלכם במבחן: <span class="num">' + rec.best + '/3</span>.</p><a class="btn secondary" href="#quiz-' + n + '">לנסות שוב את המבחן</a></div>'
-        : '<a class="btn block" href="#quiz-' + n + '">למבחן: 3 שאלות</a>') +
-
+        ? '<div class="card"><p><strong>השלב הושלם.</strong> הציון הכי טוב שלכם: <span class="num">' + rec.best + '/3</span>.' + (rec.best < 3 ? ' שפרו ל-3 כוכבים כדי לקבל עוד XP.' : '') + '</p><a class="btn secondary" href="#quiz-' + n + '">לנסות שוב את המבחן</a></div>'
+        : '<a class="btn block big" href="#quiz-' + n + '">למבחן: 3 שאלות</a>') +
       '<p class="reminder">שפת גוף נותנת סבירות, לא ודאות.</p>';
 
     const prevOk = n > 1;
     const nextOk = n < TOTAL && ['done', 'open'].includes(lessonStatus(n + 1));
     if (prevOk || nextOk) {
-      html += '<nav class="pager" aria-label="מעבר בין שיעורים">' +
-        (prevOk ? '<a class="btn ghost" href="#lesson-' + (n - 1) + '">→ שיעור ' + (n - 1) + '</a>' : '<span></span>') +
-        (nextOk ? '<a class="btn ghost" href="#lesson-' + (n + 1) + '">שיעור ' + (n + 1) + ' ←</a>' : '<span></span>') +
+      html += '<nav class="pager" aria-label="מעבר בין שלבים">' +
+        (prevOk ? '<a class="btn ghost" href="#lesson-' + (n - 1) + '">→ שלב ' + (n - 1) + '</a>' : '<span></span>') +
+        (nextOk ? '<a class="btn ghost" href="#lesson-' + (n + 1) + '">שלב ' + (n + 1) + ' ←</a>' : '<span></span>') +
       '</nav>';
     }
     render(html, 'lessons', L.title);
+    if (focusEx) document.getElementById('exercise').scrollIntoView({ block: 'center' });
 
     const cb = view.querySelector('[data-ex]');
     cb.addEventListener('change', () => {
-      if (cb.checked) state.exercises[n] = today(); else delete state.exercises[n];
-      save();
+      const res = award(() => {
+        if (cb.checked) state.exercises[n] = today(); else delete state.exercises[n];
+      });
+      if (cb.checked) {
+        sfx('right'); buzz(25);
+        toast('<bdi dir="ltr" class="toast-xp num">+' + res.gained + ' XP</bdi><span>כל הכבוד על התרגול בחיים האמיתיים</span>');
+        celebrate(res);
+      }
     });
   }
 
-  /* ---------------- quiz ---------------- */
+  /* ================= quiz ================= */
   let session = null;
 
   function buildQuestions(kind, id) {
-    const toQ = (L, q) => ({
-      q: q.q,
-      e: q.e,
-      from: L,
-      opts: shuffle(q.o.map((text, i) => ({ text, correct: i === 0 })))
-    });
-    if (kind === 'lesson') {
-      const L = lesson(id);
-      return L.quiz.map(q => toQ(L, q));
-    }
+    const toQ = (L, q) => ({ q: q.q, e: q.e, from: L, opts: shuffle(q.o.map((text, i) => ({ text, correct: i === 0 }))) });
+    if (kind === 'lesson') { const L = lesson(id); return L.quiz.map(q => toQ(L, q)); }
     if (kind === 'review') {
       const wk = WEEKS[id - 1];
       const out = [];
-      for (let n = wk.from; n <= wk.to; n++) {
-        const L = lesson(n);
-        out.push(toQ(L, L.quiz[Math.floor(Math.random() * L.quiz.length)]));
-      }
+      for (let n = wk.from; n <= wk.to; n++) { const L = lesson(n); out.push(toQ(L, L.quiz[Math.floor(Math.random() * L.quiz.length)])); }
       return shuffle(out);
     }
-    // final: 12 different lessons, one question each
     return shuffle(LESSONS).slice(0, 12).map(L => toQ(L, L.quiz[Math.floor(Math.random() * L.quiz.length)]));
   }
 
   function quizMeta(kind, id) {
-    if (kind === 'lesson') return { label: 'מבחן · שיעור ' + id, title: lesson(id).title, back: '#lesson-' + id, backLabel: 'חזרה לשיעור' };
-    if (kind === 'review') return { label: 'מבחן חזרה · שבוע ' + id, title: 'שיעורים ' + WEEKS[id - 1].from + '–' + WEEKS[id - 1].to, back: '#lessons', backLabel: 'כל השיעורים' };
-    return { label: 'מבחן מסכם', title: 'כל המסלול', back: '#lessons', backLabel: 'כל השיעורים' };
+    if (kind === 'lesson') return { label: 'שלב ' + id + ' · מבחן', back: '#lesson-' + id, backLabel: 'חזרה לשיעור' };
+    if (kind === 'review') return { label: 'בונוס · חזרה על שבוע ' + id, back: '#lessons', backLabel: 'למפה' };
+    return { label: 'מבחן מסכם', back: '#lessons', backLabel: 'למפה' };
+  }
+  function hasRecord(kind, id) {
+    return kind === 'lesson' ? !!state.lessons[id] : kind === 'review' ? !!state.reviews[id] : !!state.final;
+  }
+
+  function newSession(kind, id) {
+    return { kind, id, questions: buildQuestions(kind, id), i: 0, answers: [], combo: 0, bestCombo: 0, finished: false, firstRun: !hasRecord(kind, id), result: null };
   }
 
   function startQuiz(kind, id) {
@@ -406,36 +698,32 @@
       const st = lessonStatus(id);
       if (st === 'locked' || st === 'tomorrow') return viewLesson(id);
     } else if (kind === 'review') {
-      if (reviewStatus(id) === 'locked') return viewLocked('מבחן החזרה של שבוע ' + id + ' ייפתח אחרי שתסיימו את שיעור ' + WEEKS[id - 1].to + '.');
+      if (reviewStatus(id) === 'locked') return viewLocked('מבחן החזרה של שבוע ' + id + ' ייפתח אחרי שתסיימו את שלב ' + WEEKS[id - 1].to + '.');
     } else if (finalStatus() === 'locked') {
-      return viewLocked('המבחן המסכם ייפתח אחרי שתסיימו את שיעור 30.');
+      return viewLocked('המבחן המסכם ייפתח אחרי שתסיימו את שלב 30.');
     }
-    if (!session || session.kind !== kind || session.id !== id || session.finished) {
-      session = { kind, id, questions: buildQuestions(kind, id), i: 0, answers: [], finished: false };
-    }
+    if (!session || session.kind !== kind || session.id !== id || session.finished) session = newSession(kind, id);
     drawQuiz();
   }
 
-  function dotsHtml() {
-    return '<div class="dots" aria-hidden="true">' + session.questions.map((_, k) => {
-      const a = session.answers[k];
-      const cls = a === undefined ? (k === session.i ? 'cur' : '') : (a ? 'right' : 'wrong');
-      return '<span class="' + cls + '"></span>';
-    }).join('') + '</div>';
+  function progressBar() {
+    const s = session;
+    const done = s.answers.length;
+    return '<div class="qprog" role="progressbar" aria-valuemin="0" aria-valuemax="' + s.questions.length + '" aria-valuenow="' + done + '"><span style="width:' + Math.round(done / s.questions.length * 100) + '%"></span></div>';
   }
 
   function drawQuiz() {
     const s = session;
-    const meta = quizMeta(s.kind, s.id);
     if (s.finished) return drawResult();
+    const meta = quizMeta(s.kind, s.id);
     const Q = s.questions[s.i];
     const answered = s.answers[s.i] !== undefined;
-    const showFrom = s.kind !== 'lesson';
 
-    let html = backLink(meta.back, meta.backLabel) +
-      '<div class="qhead"><span class="eyebrow">' + esc(meta.label) + '</span>' + dotsHtml() + '</div>' +
-      '<div class="section"><span class="muted small num">שאלה ' + (s.i + 1) + ' מתוך ' + s.questions.length + '</span>' +
-      (showFrom ? '<span class="from">משיעור ' + Q.from.n + ': ' + esc(Q.from.title) + '</span>' : '') +
+    let html = '<div class="qtop">' + backLink(meta.back, meta.backLabel) +
+      (s.combo >= 2 ? '<span class="chip streak combo">' + ICON.flame + '<span>רצף ' + s.combo + '</span></span>' : '') + '</div>' +
+      progressBar() +
+      '<div class="section"><span class="eyebrow">' + esc(meta.label) + ' · <span class="num">' + (s.i + 1) + '/' + s.questions.length + '</span></span>' +
+      (s.kind !== 'lesson' ? '<span class="from">משלב ' + Q.from.n + ': ' + esc(Q.from.title) + '</span>' : '') +
       '<h1 class="question" id="q-text">' + esc(Q.q) + '</h1></div>' +
       '<div class="options" role="group" aria-labelledby="q-text">';
 
@@ -455,8 +743,8 @@
       const ok = s.answers[s.i];
       const last = s.i === s.questions.length - 1;
       html += '<div class="feedback ' + (ok ? 'right' : 'wrong') + '" id="fb" tabindex="-1" role="status">' +
-        '<strong>' + (ok ? 'נכון' : 'לא בדיוק') + '</strong><p>' + esc(Q.e) + '</p></div>' +
-        '<button type="button" class="btn block" id="next">' + (last ? 'לתוצאה' : 'לשאלה הבאה') + '</button>';
+        '<strong>' + (ok ? (s.combo >= 3 ? 'נכון, ' + s.combo + ' ברצף!' : 'נכון!') : 'לא בדיוק') + '</strong><p>' + esc(Q.e) + '</p></div>' +
+        '<button type="button" class="btn block big" id="next">' + (last ? 'לתוצאה' : 'המשך') + '</button>';
     }
 
     render(html, 'lessons', meta.label);
@@ -464,80 +752,128 @@
     if (!answered) {
       view.querySelectorAll('.opt').forEach(btn => btn.addEventListener('click', () => {
         const k = Number(btn.dataset.k);
+        const ok = Q.opts[k].correct;
         s.picked = k;
-        s.answers[s.i] = Q.opts[k].correct;
+        s.answers[s.i] = ok;
+        s.combo = ok ? s.combo + 1 : 0;
+        s.bestCombo = Math.max(s.bestCombo, s.combo);
+        if (ok) { sfx('right'); buzz(20); } else { sfx('wrong'); buzz([40, 50, 40]); }
         drawQuiz();
+        if (ok && s.firstRun) {
+          const opt = view.querySelector('.opt.right');
+          if (opt) {
+            const f = document.createElement('span');
+            f.className = 'xpfloat num';
+            f.textContent = '+' + XP.perQ + ' XP';
+            opt.appendChild(f);
+          }
+        }
+        if (!ok) { const w = view.querySelector('.opt.wrong'); if (w && !reduceMotion()) w.classList.add('shake'); }
         const fb = document.getElementById('fb');
-        if (fb) { fb.focus({ preventScroll: true }); fb.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+        if (fb) { fb.focus({ preventScroll: true }); fb.scrollIntoView({ block: 'nearest', behavior: reduceMotion() ? 'auto' : 'smooth' }); }
       }));
     } else {
       document.getElementById('next').addEventListener('click', () => {
         if (s.i < s.questions.length - 1) { s.i++; s.picked = null; drawQuiz(); }
         else {
           s.finished = true;
-          const score = s.answers.filter(Boolean).length;
-          recordResult(s.kind, s.id, score, s.questions.length);
-          drawResult();
+          s.result = recordResult(s.kind, s.id, s.answers.filter(Boolean).length, s.questions.length);
+          drawResult(true);
         }
       });
     }
   }
 
-  function drawResult() {
+  function countUp(el, from, to, ms) {
+    if (!el) return;
+    if (reduceMotion() || from === to) { el.textContent = to; return; }
+    const t0 = performance.now();
+    (function step(now) {
+      const p = Math.min(1, (now - t0) / ms);
+      el.textContent = Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(step);
+    })(t0);
+  }
+
+  function drawResult(fresh) {
     const s = session;
+    const res = s.result;
     const meta = quizMeta(s.kind, s.id);
     const total = s.questions.length;
     const score = s.answers.filter(Boolean).length;
-    const ratio = score / total;
-    let msg;
-    if (ratio === 1) msg = 'כל התשובות נכונות.';
-    else if (ratio >= 0.6) msg = 'כמעט. שווה להציץ בהסברים של מה שפספסתם.';
-    else msg = 'שווה לקרוא שוב את השיעור. ההסברים למטה יעזרו.';
+    const k = starsFor(score, total);
+    const msg = k === 3 ? 'מושלם. כל התשובות נכונות.' : k === 2 ? 'יפה מאוד. שווה להציץ בהסברים של מה שפספסתם.' : 'שווה לקרוא שוב את השיעור ולנסות שוב. ההסברים למטה יעזרו.';
 
-    const recap = '<ul class="recap">' + s.questions.map((Q, k) => {
-      const ok = s.answers[k];
-      const right = Q.opts.find(o => o.correct).text;
+    const recap = '<ul class="recap">' + s.questions.map((Q, i) => {
+      const ok = s.answers[i];
       return '<li class="' + (ok ? 'r' : 'w') + '">' + (ok ? ICON.check : ICON.cross) +
-        '<span><strong>' + esc(Q.q) + '</strong><br><span class="muted">' + esc(right) + '</span></span></li>';
+        '<span><strong>' + esc(Q.q) + '</strong><br><span class="muted">' + esc(Q.opts.find(o => o.correct).text) + '</span></span></li>';
     }).join('') + '</ul>';
 
     let actions = '';
     if (s.kind === 'lesson') {
       const n = s.id;
       const wkEnd = WEEKS.find(w => w.to === n);
-      if (wkEnd && reviewStatus(wkEnd.w) === 'open') {
-        actions += '<a class="btn" href="#review-' + wkEnd.w + '">למבחן החזרה של שבוע ' + wkEnd.w + '</a>';
-      } else if (n === TOTAL && finalStatus() === 'open') {
-        actions += '<a class="btn" href="#final">למבחן המסכם</a>';
-      } else if (n < TOTAL && lessonStatus(n + 1) === 'open') {
-        actions += '<a class="btn" href="#lesson-' + (n + 1) + '">לשיעור ' + (n + 1) + '</a>';
-      } else if (n < TOTAL) {
-        actions += '<a class="btn" href="#home">סיימתם להיום</a>';
-      }
-      actions += '<a class="btn secondary" href="#lesson-' + n + '">חזרה לשיעור</a>';
+      if (wkEnd && reviewStatus(wkEnd.w) === 'open') actions += '<a class="btn gold" href="#review-' + wkEnd.w + '">לשלב הבונוס: חזרה על שבוע ' + wkEnd.w + '</a>';
+      else if (n === TOTAL && finalStatus() === 'open') actions += '<a class="btn gold" href="#final">למבחן המסכם</a>';
+      else if (n < TOTAL && lessonStatus(n + 1) === 'open') actions += '<a class="btn" href="#lesson-' + (n + 1) + '">לשלב ' + (n + 1) + '</a>';
+      else if (!state.exercises[n]) actions += '<a class="btn" href="#lesson-' + n + '-ex">למשימה בחיים האמיתיים</a>';
+      else actions += '<a class="btn" href="#home">לדף הבית</a>';
     } else {
       actions += '<a class="btn" href="#home">לדף הבית</a>';
     }
     actions += '<button type="button" class="btn secondary" id="again">לנסות שוב</button>';
 
+    const L1 = res.lvlBefore, L2 = res.lvlAfter;
+    const xpNote = res.gained > 0 ? '' : '<p class="muted small">XP ניתן על שיפור הציון הכי טוב. הפעם לא היה שיפור, אבל התרגול עדיין שווה.</p>';
+    const levelBlock = '<div class="lvl-row">' + medal(L2.n, 'sm') +
+      '<span class="pinfo"><span class="pname">' + esc(L2.name) + '</span>' +
+      '<span class="xpbar"><span class="fill" id="lvlfill" style="width:' + Math.round((res.levelUp ? 0 : L1.pct) * 100) + '%"></span></span></span></div>';
+
+    const levelUp = res.levelUp ? '<div class="levelup">' + medal(L2.n) + '<div><span class="eyebrow">רמה חדשה</span><h2>רמה ' + L2.n + ': ' + esc(L2.name) + '</h2></div></div>' : '';
+    const newBadges = res.badges.length
+      ? '<section class="card"><h2>הישגים חדשים</h2><div class="badge-grid">' + res.badges.map(b =>
+          '<div class="badge new">' + badgeIcon(b) + '<strong>' + esc(b.name) + '</strong><span>' + esc(b.desc) + '</span></div>').join('') + '</div></section>'
+      : '';
     const nextNote = (s.kind === 'lesson' && s.id < TOTAL && lessonStatus(s.id + 1) === 'tomorrow')
-      ? '<p class="muted small">השיעור הבא ייפתח מחר. עד אז, נסו את התרגיל של היום.</p>' : '';
+      ? '<p class="muted small">השלב הבא ייפתח מחר.' + (state.exercises[s.id] ? '' : ' עד אז, יש משימה בחיים האמיתיים.') + '</p>' : '';
 
     render(
       '<section class="card result"><span class="eyebrow">' + esc(meta.label) + '</span>' +
-        '<div class="score">' + score + '<span>/' + total + '</span></div>' +
-        '<p>' + msg + '</p>' + nextNote + '</section>' +
+        stars(k, 'big' + (fresh ? ' pop' : '')) +
+        '<div class="score num">' + score + '<span>/' + total + '</span></div>' +
+        '<p>' + msg + '</p>' +
+        (s.bestCombo >= 3 ? '<span class="chip streak">' + ICON.flame + '<span>הרצף הכי ארוך: ' + s.bestCombo + '</span></span>' : '') +
+        '<div class="xpgain"><bdi dir="ltr" class="num">+<span id="xpnum">0</span> XP</bdi></div>' + xpNote + levelBlock + nextNote +
+      '</section>' + levelUp + newBadges +
       '<div class="btn-row">' + actions + '</div>' +
       '<section class="section"><h2>סיכום התשובות</h2>' + recap + '</section>',
       'lessons', 'תוצאה'
     );
+
+    if (fresh) {
+      countUp(document.getElementById('xpnum'), 0, res.gained, 900);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const f = document.getElementById('lvlfill');
+        if (f) f.style.width = Math.round(L2.pct * 100) + '%';
+      }));
+      if (res.levelUp) celebrate(res, true);
+      else {
+        sfx('done'); buzz(30);
+        if (k === 3) confetti();
+      }
+    } else {
+      document.getElementById('xpnum').textContent = res.gained;
+      const f = document.getElementById('lvlfill');
+      if (f) f.style.width = Math.round(L2.pct * 100) + '%';
+    }
     document.getElementById('again').addEventListener('click', () => {
-      session = { kind: s.kind, id: s.id, questions: buildQuestions(s.kind, s.id), i: 0, answers: [], finished: false };
+      session = newSession(s.kind, s.id);
       drawQuiz();
     });
   }
 
-  /* ---------------- progress ---------------- */
+  /* ================= progress ================= */
   function pips(score, total) {
     let h = '<span class="pips" aria-label="' + score + ' מתוך ' + total + '">';
     if (total <= 3) for (let i = 0; i < total; i++) h += '<i class="' + (i < score ? 'on' : '') + '"></i>';
@@ -548,84 +884,96 @@
     const set = new Set(state.days);
     const t = today();
     const [y, m, d] = t.split('-').map(Number);
-    const dow = new Date(y, m - 1, d).getDay(); // 0 = Sunday
-    const start = addDays(t, -(dow + 28)); // 5 weeks, starting on a Sunday
+    const dow = new Date(y, m - 1, d).getDay();
+    const start = addDays(t, -(dow + 28));
     let html = '<div class="cal" role="img" aria-label="ימי לימוד בחמשת השבועות האחרונים">';
     ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'].forEach(l => { html += '<span class="dh">' + l + '</span>'; });
     for (let i = 0; i < 35; i++) {
       const k = addDays(start, i);
-      const day = Number(k.slice(8));
       let cls = 'd';
       if (k > t) cls += ' future';
       else if (set.has(k)) cls += ' on';
       if (k === t) cls += ' is-today';
-      html += '<span class="' + cls + '">' + (k > t ? '' : day) + '</span>';
+      html += '<span class="' + cls + '">' + (k > t ? '' : Number(k.slice(8))) + '</span>';
     }
     return html + '</div>';
   }
 
+  function installSection() {
+    let body;
+    if (isStandalone()) body = '<p class="small">האפליקציה מותקנת ופועלת מהמסך הבית.</p>';
+    else if (installEvent) body = '<p class="small">אייקון במסך הבית, מסך מלא, ועובד גם בלי אינטרנט.</p><button type="button" class="btn" id="install-btn">להתקין</button>';
+    else if (isIOS()) body = '<ol class="steps"><li>פתחו את הדף בספארי.</li><li>לחצו על כפתור השיתוף (ריבוע עם חץ למעלה).</li><li>בחרו "הוספה למסך הבית" ואשרו.</li></ol>';
+    else body = '<ol class="steps"><li>פתחו את הדף בכרום.</li><li>לחצו על תפריט שלוש הנקודות.</li><li>בחרו "התקנת אפליקציה" או "הוספה למסך הבית".</li></ol>';
+    return '<section class="card"><h2>להתקין בטלפון</h2>' + body + '</section>';
+  }
+
   function viewProgress() {
     const s = streaks();
+    const xp = computeXP(state);
+    const L = levelInfo(xp);
     const recs = Object.keys(state.lessons).map(Number).sort((a, b) => a - b);
-    const avg = recs.length
-      ? Math.round(recs.reduce((sum, n) => sum + state.lessons[n].best / 3, 0) / recs.length * 100)
-      : null;
+    const avg = recs.length ? Math.round(recs.reduce((sum, n) => sum + state.lessons[n].best / 3, 0) / recs.length * 100) : null;
+    const earned = earnedBadges();
+    const starsTotal = recs.reduce((sum, n) => sum + starsFor(state.lessons[n].best, 3), 0);
 
-    let html = '<div class="lesson-head"><h1>ההתקדמות שלכם</h1></div>' +
+    let html = '<div class="lesson-head"><h1>הפרופיל שלכם</h1></div>' +
+      playerCard(false) +
       '<div class="stats">' +
         '<div class="stat hot"><span class="v num">' + s.cur + '</span><span class="l">ימים ברצף' + (s.cur && !s.activeToday ? ' (עוד לא היום)' : '') + '</span></div>' +
         '<div class="stat"><span class="v num">' + s.best + '</span><span class="l">הרצף הכי ארוך</span></div>' +
-        '<div class="stat"><span class="v num">' + recs.length + '<small>/30</small></span><span class="l">שיעורים שהושלמו</span></div>' +
-        '<div class="stat"><span class="v num">' + (avg === null ? '–' : avg + '<small>%</small>') + '</span><span class="l">ציון ממוצע (הכי טוב)</span></div>' +
+        '<div class="stat"><span class="v num">' + recs.length + '<small> מתוך 30</small></span><span class="l">שלבים שהושלמו</span></div>' +
+        '<div class="stat gold"><span class="v num">' + starsTotal + '<small> מתוך 90</small></span><span class="l">כוכבים</span></div>' +
       '</div>' +
+
+      '<section class="card"><div class="quests-head"><h2>הישגים</h2><span class="chip num">' + earned.length + '/' + BADGES.length + '</span></div><div class="badge-grid">' +
+        BADGES.map(b => {
+          const has = earned.includes(b.id);
+          return '<div class="badge' + (has ? '' : ' is-locked') + '">' + badgeIcon(b, !has) + '<strong>' + esc(b.name) + '</strong><span>' + esc(b.desc) + '</span></div>';
+        }).join('') + '</div></section>' +
+
       '<section class="card"><h2>ימי לימוד</h2>' + calendarHtml() +
-        '<p class="muted small">יום נספר ברצף כשמסיימים בו מבחן של שיעור או מבחן חזרה.</p></section>';
+        '<p class="muted small">יום נספר ברצף כשמסיימים בו מבחן של שלב או מבחן חזרה.</p></section>';
 
-    // lesson scores
     if (recs.length) {
-      html += '<section class="card"><h2>ציונים בשיעורים</h2><ul class="scores">' +
-        recs.map(n => {
-          const r = state.lessons[n];
-          return '<li><span class="n">' + n + '</span><a class="t" href="#lesson-' + n + '">' + esc(lesson(n).title) + '</a>' + pips(r.best, 3) + '</li>';
-        }).join('') + '</ul>' +
-        '<p class="muted small">מוצג הציון הכי טוב בכל שיעור. אפשר לחזור על כל מבחן כמה פעמים שרוצים.</p></section>';
-    } else {
-      html += '<section class="card empty"><h2>עוד אין ציונים</h2><p>אחרי המבחן של השיעור הראשון, הציונים יופיעו כאן.</p><a class="btn" href="#home">לשיעור הראשון</a></section>';
-    }
-
-    const revs = WEEKS.filter(w => state.reviews[w.w]);
-    if (revs.length || state.final) {
-      html += '<section class="card"><h2>מבחני חזרה</h2><ul class="scores">' +
-        revs.map(w => {
-          const r = state.reviews[w.w];
-          return '<li><span class="n">' + w.w + '</span><a class="t" href="#review-' + w.w + '">שבוע ' + w.w + ' · שיעורים ' + w.from + '–' + w.to + '</a>' + pips(r.best, r.total) + '</li>';
-        }).join('') +
+      html += '<section class="card"><div class="quests-head"><h2>ציונים</h2><span class="muted small">ממוצע ' + avg + '%</span></div><ul class="scores">' +
+        recs.map(n => '<li><span class="n">' + n + '</span><a class="t" href="#lesson-' + n + '">' + esc(lesson(n).title) + '</a>' + stars(starsFor(state.lessons[n].best, 3), 'tiny') + '</li>').join('') +
+        WEEKS.filter(w => state.reviews[w.w]).map(w => { const r = state.reviews[w.w]; return '<li><span class="n">★</span><a class="t" href="#review-' + w.w + '">חזרה: שבוע ' + w.w + '</a>' + pips(r.best, r.total) + '</li>'; }).join('') +
         (state.final ? '<li><span class="n">★</span><a class="t" href="#final">מבחן מסכם</a>' + pips(state.final.best, state.final.total) + '</li>' : '') +
-        '</ul></section>';
+        '</ul><p class="muted small">מוצג הציון הכי טוב. אפשר לחזור על כל מבחן כדי לשפר כוכבים.</p></section>';
     }
 
-    const exCount = Object.keys(state.exercises).length;
-    if (exCount) html += '<p class="muted small" style="text-align:center">תרגילים שסימנתם כבוצעו: <span class="num">' + exCount + '</span></p>';
+    html += '<section class="card"><h2>איך צוברים XP</h2><ul class="xp-rules">' +
+      '<li><span>מבחן של שלב</span><b class="num">' + XP.lesson + ' + ' + XP.perQ + ' לכל תשובה נכונה</b></li>' +
+      '<li><span>3 מתוך 3</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.perfect + '</bdi></b></li>' +
+      '<li><span>משימה בחיים האמיתיים</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.exercise + '</bdi></b></li>' +
+      '<li><span>מבחן חזרה שבועי</span><b class="num">' + XP.review + ' + ' + XP.perQ + ' לכל תשובה נכונה</b></li>' +
+      '<li><span>כל יום ברצף הכי ארוך</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.streakDay + '</bdi></b></li>' +
+      '</ul><p class="muted small">רמה ' + L.n + ' מתוך ' + LEVELS.length + '. ניסיון חוזר נותן XP רק אם הוא משפר את הציון הכי טוב.</p></section>';
+
+    html += installSection();
 
     html += '<details class="settings" id="settings"><summary>הגדרות</summary><div class="inner">' +
-      '<label class="check" for="preview-all"><input type="checkbox" id="preview-all"' + (state.previewAll ? ' checked' : '') + '> לפתוח את כל השיעורים עכשיו (בלי לחכות יום)</label>' +
+      '<label class="check" for="sound"><input type="checkbox" id="sound"' + (state.sound ? ' checked' : '') + '> צלילים ורטט</label>' +
+      '<label class="check" for="preview-all"><input type="checkbox" id="preview-all"' + (state.previewAll ? ' checked' : '') + '> לפתוח את כל השלבים עכשיו (בלי לחכות יום)</label>' +
       '<p class="muted small">שימושי כדי לעיין בתוכן מראש. ההתקדמות והציונים נשמרים כרגיל.</p>' +
       '<button type="button" class="btn secondary" id="reset">איפוס כל ההתקדמות</button>' +
-      '<div class="confirm" id="confirm" hidden><p><strong>למחוק את כל הציונים, הרצף והשיעורים שהושלמו?</strong> אי אפשר לבטל את זה.</p>' +
+      '<div class="confirm" id="confirm" hidden><p><strong>למחוק את כל ה-XP, ההישגים, הרצף והשלבים שהושלמו?</strong> אי אפשר לבטל את זה.</p>' +
       '<div class="btn-row"><button type="button" class="btn danger" id="reset-yes">כן, לאפס</button><button type="button" class="btn secondary" id="reset-no">ביטול</button></div></div>' +
       '</div></details>';
 
-    render(html, 'progress', 'התקדמות');
+    render(html, 'progress', 'פרופיל');
+    bindInstall();
 
-    document.getElementById('preview-all').addEventListener('change', e => {
-      state.previewAll = e.target.checked;
-      save();
-    });
+    document.getElementById('sound').addEventListener('change', e => { state.sound = e.target.checked; save(); if (state.sound) sfx('tick'); });
+    document.getElementById('preview-all').addEventListener('change', e => { state.previewAll = e.target.checked; save(); });
     const confirmBox = document.getElementById('confirm');
     document.getElementById('reset').addEventListener('click', () => { confirmBox.hidden = false; document.getElementById('reset-no').focus(); });
     document.getElementById('reset-no').addEventListener('click', () => { confirmBox.hidden = true; });
     document.getElementById('reset-yes').addEventListener('click', () => {
+      const sound = state.sound;
       state = blankState();
+      state.sound = sound;
       session = null;
       save();
       location.hash = '#home';
@@ -633,7 +981,7 @@
     });
   }
 
-  /* ---------------- router ---------------- */
+  /* ================= router ================= */
   function route() {
     const h = (location.hash || '').replace(/^#/, '');
     let m;
@@ -641,14 +989,13 @@
     if (h === 'lessons') return viewLessons();
     if (h === 'progress') return viewProgress();
     if (h === 'final') return startQuiz('final', 0);
-    if ((m = h.match(/^lesson-(\d+)$/))) return viewLesson(Number(m[1]));
+    if ((m = h.match(/^lesson-(\d+)(-ex)?$/))) return viewLesson(Number(m[1]), !!m[2]);
     if ((m = h.match(/^quiz-(\d+)$/)) && lesson(Number(m[1]))) return startQuiz('lesson', Number(m[1]));
     if ((m = h.match(/^review-([1-4])$/))) return startQuiz('review', Number(m[1]));
     return viewHome();
   }
 
   window.addEventListener('hashchange', route);
-  // Re-check day-based unlocks when the app comes back to the foreground after midnight.
   let lastDay = today();
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && today() !== lastDay) {
@@ -657,6 +1004,9 @@
     }
   });
   window.addEventListener('storage', e => { if (e.key === STORE_KEY) { state = load(); route(); } });
+
+  // Players who already finished things before the game layer existed shouldn't get a flood of toasts.
+  if (!state.seenBadges.length) { state.seenBadges = earnedBadges(); if (state.seenBadges.length) save(); }
 
   route();
 })();
