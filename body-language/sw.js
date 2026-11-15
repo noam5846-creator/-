@@ -1,7 +1,7 @@
 // Offline support: app files are cached on install; fonts are cached the first time they load.
-const CACHE = 'bodylang-v4';
+const CACHE = 'bodylang-v5';
 const APP = [
-  './', './index.html', './styles.css', './app.js', './lessons-a.js', './lessons-b.js', './feed-a.js', './feed-b.js', './feed-c.js', './lessons-extra.js', './pics.js', './stories.js',
+  './', './index.html', './styles.css', './app.js', './lessons-a.js', './lessons-b.js', './feed-a.js', './feed-b.js', './feed-c.js', './lessons-extra.js', './lessons-hard.js', './tools.js', './pics.js', './stories.js',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ];
 

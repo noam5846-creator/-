@@ -107,7 +107,7 @@
   function weekOf(n) { return n <= 28 ? Math.ceil(n / 7) : 5; }
 
   /* ================= game: XP, levels, badges ================= */
-  const XP = { lesson: 20, perQ: 10, perfect: 15, review: 30, reviewPerfect: 30, final: 50, finalPerfect: 50, exercise: 15, streakDay: 5, blitzBest: 5, blitzDay: 10, story: 20, storyStep: 10, practice: 2, srsCleared: 5, journalDay: 5 };
+  const XP = { lesson: 20, perQ: 10, perfect: 15, review: 30, reviewPerfect: 30, final: 50, finalPerfect: 50, exercise: 15, streakDay: 5, blitzBest: 5, blitzDay: 10, story: 20, storyStep: 10, practice: 2, srsCleared: 5, journalDay: 5, tool: 10 };
   const FEED_XP = { right: 5, wrong: 1, read: 2, done: 10 };
   const LEVELS = [
     { xp: 0, name: 'מתבונן מתחיל' },
@@ -137,6 +137,7 @@
     Object.values(s.practiceDays || {}).forEach(c => { xp += Math.min(c, 20) * XP.practice; });
     xp += (s.srsCleared || 0) * XP.srsCleared;
     xp += new Set((s.journal || []).map(j => j.d)).size * XP.journalDay;
+    xp += Object.keys(s.toolsTried || {}).length * XP.tool;
     return xp;
   }
   function levelInfo(xp) {
@@ -178,6 +179,7 @@
     { id: 'storyall', icon: 'book', name: 'כל הבחירות הנכונות', desc: 'כל הבחירות טובות בכל הסיפורים', test: c => c.storiesPerfect },
     { id: 'srs10', icon: 'target', name: 'לומדים מטעויות', desc: '10 שאלות שעברו את כל החזרות', test: c => c.srsCleared >= 10 },
     { id: 'journal5', icon: 'pen', name: 'כותבי יומן', desc: '5 ימים עם רשומה ביומן', test: c => c.journalDays >= 5 },
+    { id: 'tools5', icon: 'check', name: 'מהתיאוריה לחיים', desc: '5 כלים מארגז הכלים שניסיתם', test: c => c.tools >= 5 },
     { id: 'master', icon: 'crown', name: 'אמני הסבירות', desc: '10 ומעלה במבחן המסכם', test: c => c.s.final && c.s.final.best >= 10 }
   ];
   function earnedBadges(s) {
@@ -199,6 +201,7 @@
       stories: Object.keys(s.stories || {}).length,
       storiesPerfect: (window.STORIES || []).length > 0 && (window.STORIES || []).every(st => (s.stories || {})[st.id] === st.steps.length),
       srsCleared: s.srsCleared || 0,
+      tools: Object.keys(s.toolsTried || {}).length,
       journalDays: new Set((s.journal || []).map(j => j.d)).size,
       comeback: recs.concat(Object.values(s.reviews), s.final ? [s.final] : []).some(r => r.best > r.first)
     };
@@ -376,6 +379,7 @@
     bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
     book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5C6.5 4 9.5 4 12 5.5 14.5 4 17.5 4 20 5.5V19c-2.5-1.5-5.5-1.5-8 0-2.5-1.5-5.5-1.5-8 0zM12 5.5V19"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>',
     star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z"/></svg>'
   };
   const GLYPH = {
@@ -727,28 +731,40 @@
     return { q: q.q, e: q.e, qid: 'L' + n + '-' + k, fromLabel: 'משלב ' + n + ': ' + L.title, opts: shuffle(q.o.map((text, i) => ({ text, correct: i === 0 }))) };
   }
   function randomPoolQ(n) { return poolQ(n, Math.floor(Math.random() * lessonPool(n).length)); }
+  function hardPool(n) { return (window.LESSON_HARD || {})[n] || []; }
+  function hardQ(n, k) {
+    const L = lesson(n), q = hardPool(n)[k];
+    return { q: q.q, e: q.e, qid: 'H' + n + '-' + k, hard: true, fromLabel: 'משלב ' + n + ': ' + L.title, opts: shuffle(q.o.map((text, i) => ({ text, correct: i === 0 }))) };
+  }
+  function randomHardQ(n) { const h = hardPool(n); return h.length ? hardQ(n, Math.floor(Math.random() * h.length)) : randomPoolQ(n); }
   function cardToQ(c) {
     if (c.type === 'tf') return { q: c.text, e: (c.truth ? 'זו עובדה. ' : 'זה מיתוס. ') + c.explain, qid: c.id, fromLabel: topicName(c.topic), opts: [{ text: 'עובדה', correct: c.truth }, { text: 'מיתוס', correct: !c.truth }] };
     if (c.type === 'sc' || c.type === 'pic') return { q: c.type === 'pic' ? c.q : c.text, e: c.explain, qid: c.id, fromLabel: topicName(c.topic), art: c.type === 'pic' ? picArt(c) : '', opts: shuffle(c.options.map((text, i) => ({ text, correct: i === 0 }))) };
     return null;
   }
   function qidToQ(qid) {
+    const mh = /^H(\d+)-(\d+)$/.exec(qid);
+    if (mh) { const n = Number(mh[1]), k = Number(mh[2]); return lesson(n) && hardPool(n)[k] ? hardQ(n, k) : null; }
     const m = /^L(\d+)-(\d+)$/.exec(qid);
     if (m) { const n = Number(m[1]), k = Number(m[2]); return lesson(n) && lessonPool(n)[k] ? poolQ(n, k) : null; }
     const c = cardById(qid);
     return c ? cardToQ(c) : null;
   }
   function buildQuestions(kind, id) {
-    if (kind === 'lesson') return shuffle(lessonPool(id).map((_, k) => k)).slice(0, 3).map(k => poolQ(id, k));
+    if (kind === 'lesson') {
+      const hard = shuffle(hardPool(id).map((_, k) => k)).slice(0, 2).map(k => hardQ(id, k));
+      const easy = shuffle(lessonPool(id).map((_, k) => k)).slice(0, 3 - hard.length).map(k => poolQ(id, k));
+      return shuffle(hard.concat(easy));
+    }
     if (kind === 'review') {
       const wk = WEEKS[id - 1];
       const out = [];
-      for (let n = wk.from; n <= wk.to; n++) out.push(randomPoolQ(n));
+      for (let n = wk.from; n <= wk.to; n++) out.push(randomHardQ(n));
       return shuffle(out);
     }
     if (kind === 'mistakes') return dueMistakes().slice(0, 10).map(qidToQ).filter(Boolean);
     if (kind === 'practice') return practiceQuestions(id);
-    return shuffle(LESSONS).slice(0, 12).map(L => randomPoolQ(L.n));
+    return shuffle(LESSONS).slice(0, 12).map(L => randomHardQ(L.n));
   }
 
   function quizMeta(kind, id) {
@@ -802,6 +818,7 @@
       (s.combo >= 2 ? '<span class="chip streak combo">' + ICON.flame + '<span>רצף ' + s.combo + '</span></span>' : '') + '</div>' +
       progressBar() +
       '<div class="section"><span class="eyebrow">' + esc(meta.label) + ' · <span class="num">' + (s.i + 1) + '/' + s.questions.length + '</span></span>' +
+      (Q.hard ? '<span class="chip hard-chip">שאלת יישום</span>' : '') +
       (s.kind !== 'lesson' && Q.fromLabel ? '<span class="from">' + esc(Q.fromLabel) + '</span>' : '') +
       (Q.art || '') +
       '<h1 class="question" id="q-text">' + esc(Q.q) + '</h1></div>' +
@@ -1045,6 +1062,7 @@
       '<li><span>סיפור: סיום, וכל בחירה טובה (בתוצאה הכי טובה)</span><b class="num"><bdi dir="ltr">+' + XP.story + ' / +' + XP.storyStep + '</bdi></b></li>' +
       '<li><span>אימון: כל תשובה נכונה (עד 20 ביום)</span><b class="num"><bdi dir="ltr">+' + XP.practice + '</bdi></b></li>' +
       '<li><span>שאלה שעברה את כל החזרות על טעויות</span><b class="num"><bdi dir="ltr">+' + XP.srsCleared + '</bdi></b></li>' +
+      '<li><span>כלי מארגז הכלים שניסיתם בחיים</span><b class="num"><bdi dir="ltr">+' + XP.tool + '</bdi></b></li>' +
       '<li><span>יום עם רשומה ביומן</span><b class="num"><bdi dir="ltr">+' + XP.journalDay + '</bdi></b></li>' +
       '<li><span>כל יום ברצף הכי ארוך</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.streakDay + '</bdi></b></li>' +
       '</ul><p class="muted small">רמה ' + L.n + ' מתוך ' + LEVELS.length + '. ניסיון חוזר נותן XP רק אם הוא משפר את הציון הכי טוב.</p></section>';
@@ -1447,7 +1465,7 @@
   }
   function topicQuestions(t) {
     const qs = [];
-    if (typeof t === 'number') lessonPool(t).forEach((_, k) => qs.push(poolQ(t, k)));
+    if (typeof t === 'number') { lessonPool(t).forEach((_, k) => qs.push(poolQ(t, k))); hardPool(t).forEach((_, k) => qs.push(hardQ(t, k))); }
     FEED.filter(c => c.topic === t && ['tf', 'sc', 'pic'].includes(c.type)).forEach(c => qs.push(cardToQ(c)));
     return qs;
   }
@@ -1736,12 +1754,56 @@
     const due = dueMistakes().length;
     const storiesNew = (window.STORIES || []).filter(st => !(state.stories || {})[st.id]).length;
     return (due ? '<a class="card linkcard mistakes-card" href="#mistakes">' + ICON.bolt + '<span><strong>חזרה על טעויות</strong><br><span class="muted small">' + due + ' שאלות שטעיתם בהן מחכות לכם היום</span></span></a>' : '') +
+      '<a class="card linkcard tools-card" href="#tools"><span class="story-ic">' + ICON.book.replace('<svg', '<svg') + '</span><span><strong>ארגז כלים</strong><br><span class="muted small">' + (window.TOOLS || []).length + ' מצבים מהחיים: מה להגיד ומה לעשות, כבר היום</span></span></a>' +
       '<section class="tiles" aria-label="עוד דרכים ללמוד">' +
         '<a class="tile" href="#feed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10 9.5v5l4-2.5z"/></svg><strong>פיד</strong><span>' + FEED.filter(c => !state.feed[c.id] && !state.seen.includes(c.id)).length + ' חדשים</span></a>' +
         '<a class="tile gold" href="#blitz"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.bolt + '</svg><strong>סבב בזק</strong><span>שיא: ' + (state.blitz.best || 0) + '</span></a>' +
         '<a class="tile" href="#stories"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.book + '</svg><strong>סיפורים</strong><span>' + (storiesNew ? storiesNew + ' חדשים' : 'שחקו שוב') + '</span></a>' +
         '<a class="tile" href="#practice"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.target + '</svg><strong>אימון</strong><span>לפי נושא</span></a>' +
       '</section>';
+  }
+
+  /* ================= toolbox ================= */
+  let toolCat = 'all';
+  function viewTools() {
+    const tools = window.TOOLS || [];
+    const cats = window.TOOL_CATS || {};
+    const tried = state.toolsTried || {};
+    const list = tools.filter(t => toolCat === 'all' || t.cat === toolCat);
+    const ul = (arr, cls) => '<ul class="' + cls + '">' + arr.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>';
+    render(backLink('#home', 'לדף הבית') +
+      '<div class="lesson-head"><h1>ארגז כלים</h1><p class="muted">' + tools.length + ' מצבים מהחיים: מה עושים עם הגוף ומה אומרים, במשפטים שאפשר להשתמש בהם כבר היום. ניסיתם כלי? סמנו אותו וקבלו XP.</p></div>' +
+      '<div class="topic-chips" role="group" aria-label="סינון לפי נושא">' +
+        '<button type="button" class="tchip' + (toolCat === 'all' ? ' on' : '') + '" data-cat="all">הכל</button>' +
+        Object.keys(cats).map(k => '<button type="button" class="tchip' + (toolCat === k ? ' on' : '') + '" data-cat="' + k + '">' + esc(cats[k]) + '</button>').join('') +
+      '</div>' +
+      '<div class="tool-list">' + list.map(t => '<details class="tool" id="tool-' + t.id + '">' +
+        '<summary><span class="tool-title">' + esc(t.title) + '</span>' + (tried[t.id] ? '<span class="chip ok">ניסיתי</span>' : '<span class="chip">' + esc(cats[t.cat] || '') + '</span>') + '</summary>' +
+        '<div class="tool-body">' +
+          '<h3>מה אומרים</h3><div class="say-list">' + t.say.map((x, k) => '<div class="say"><span>' + esc(x) + '</span><button type="button" class="say-copy" data-copy="' + t.id + ':' + k + '" aria-label="העתקה">' + ICON.copy + '</button></div>').join('') + '</div>' +
+          '<h3>מה עושים עם הגוף</h3>' + ul(t.body, 'tool-ul') +
+          '<h3>ממה להימנע</h3>' + ul(t.avoid, 'tool-ul avoid') +
+          '<p class="tool-why"><strong>למה זה עובד: </strong>' + esc(t.why) + '</p>' +
+          (tried[t.id] ? '<p class="fdone">' + ICON.check + ' ניסיתם את זה</p>'
+            : '<button type="button" class="btn" data-tried="' + t.id + '">ניסיתי את זה בחיים <bdi dir="ltr">+' + XP.tool + ' XP</bdi></button>') +
+        '</div></details>').join('') + '</div>',
+      'home', 'ארגז כלים');
+    view.querySelectorAll('[data-cat]').forEach(b => b.addEventListener('click', () => { toolCat = b.dataset.cat; viewTools(); }));
+    view.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
+      const [id, k] = b.dataset.copy.split(':');
+      const t = tools.find(x => x.id === id);
+      copyText(t.say[Number(k)].replace(/^"|"$/g, '').replace(/"\s*\(.*\)$/, ''));
+    }));
+    view.querySelectorAll('[data-tried]').forEach(b => b.addEventListener('click', () => {
+      const id = b.dataset.tried;
+      const res = award(() => { state.toolsTried = state.toolsTried || {}; state.toolsTried[id] = today(); markActive(); });
+      sfx('right'); buzz(20);
+      toast('<bdi dir="ltr" class="toast-xp num">+' + res.gained + ' XP</bdi><span>כל הכבוד. רוצים לכתוב ביומן מה קרה?</span>');
+      celebrate(res);
+      viewTools();
+      const el = document.getElementById('tool-' + id);
+      if (el) { el.open = true; el.scrollIntoView({ block: 'start' }); }
+    }));
   }
 
   /* ================= router ================= */
@@ -1759,6 +1821,7 @@
     if (h === 'saved') return viewSaved();
     if (h === 'blitz') return viewBlitz();
     if (h === 'practice') return viewPractice();
+    if (h === 'tools') return viewTools();
     if (h === 'mistakes') return startQuiz('mistakes', 0);
     if (h === 'stories') return viewStories();
     if (h === 'journal') return viewJournal();

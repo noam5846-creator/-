@@ -931,3 +931,24 @@ body.feed-mode .view > * { animation: none; }
 .welcome-ic { width: 96px; height: 96px; border-radius: 28px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; box-shadow: 0 6px 0 var(--accent-deep); }
 .welcome-ic svg { width: 52px; height: 52px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .welcome .dots span { width: 10px; height: 10px; }
+
+/* =================== toolbox =================== */
+.tchip { border: 0; cursor: pointer; font-family: inherit; }
+.tchip.on { background: var(--accent); color: var(--on-accent); }
+.tool-list { display: flex; flex-direction: column; gap: 10px; }
+.tool { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.tool summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; min-height: 56px; }
+.tool summary::-webkit-details-marker { display: none; }
+.tool-title { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; line-height: 1.3; }
+.tool[open] summary { border-bottom: 1px solid var(--line); }
+.tool-body { padding: 14px 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.tool-body h3 { font-size: .95rem; color: var(--muted); margin-top: 4px; }
+.say-list { display: flex; flex-direction: column; gap: 8px; }
+.say { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; background: var(--accent-soft); border-radius: 14px 14px 4px 14px; padding: 10px 12px; font-weight: 600; line-height: 1.45; }
+.say-copy { width: 40px; height: 40px; border-radius: 10px; border: 0; background: var(--surface); color: var(--accent-strong); display: grid; place-items: center; cursor: pointer; }
+.say-copy svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.tool-ul { margin: 0; padding-inline-start: 20px; display: flex; flex-direction: column; gap: 4px; }
+.tool-ul.avoid li::marker { color: var(--bad); }
+.tool-why { background: var(--sunken); border-radius: 10px; padding: 10px 12px; font-size: .95rem; }
+.tools-card { border-color: var(--accent); background: var(--accent-soft); }
+.hard-chip { align-self: flex-start; background: var(--gold-soft); color: var(--gold-deep); }
