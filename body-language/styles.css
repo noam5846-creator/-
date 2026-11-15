@@ -952,3 +952,41 @@ body.feed-mode .view > * { animation: none; }
 .tool-why { background: var(--sunken); border-radius: 10px; padding: 10px 12px; font-size: .95rem; }
 .tools-card { border-color: var(--accent); background: var(--accent-soft); }
 .hard-chip { align-self: flex-start; background: var(--gold-soft); color: var(--gold-deep); }
+
+/* =================== simulator & chat formats =================== */
+.sim-card { border-color: var(--gold); background: var(--gold-soft); }
+.sim-ic { background: var(--accent); }
+.sim-ic svg { stroke: var(--on-accent); fill: none; }
+.sim-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mood { display: flex; flex-direction: column; gap: 4px; min-width: 140px; }
+.mood-bar { display: block; height: 10px; border-radius: 999px; background: linear-gradient(to left, var(--bad), var(--gold), var(--good)); position: relative; overflow: hidden; }
+.mood-bar span { position: absolute; inset-block: 0; inset-inline-start: 0; border-inline-end: 3px solid var(--ink); background: transparent; transition: width .4s ease; }
+.sim-intro { color: var(--muted); font-style: italic; }
+.chat { display: flex; flex-direction: column; gap: 8px; }
+.bub {
+  max-width: 85%; padding: 10px 14px; border-radius: 18px; line-height: 1.45; font: inherit; text-align: start;
+  border: 1.5px solid transparent;
+}
+.bub.them { align-self: flex-start; background: var(--surface); border-color: var(--line); border-start-start-radius: 4px; color: var(--ink); }
+.bub.me { align-self: flex-end; background: var(--accent); color: var(--on-accent); border-start-end-radius: 4px; }
+.bub.reply { font-style: italic; }
+.bub.good { background: var(--good-soft); color: var(--ink); border-color: var(--good); }
+.cue { align-self: flex-start; display: flex; gap: 6px; align-items: center; font-size: .85rem; color: var(--muted); font-style: italic; margin-top: -2px; }
+.cue svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; flex: none; }
+.fix { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.fix-l { font-size: .85rem; font-weight: 700; color: var(--good); }
+.chat.spot .bub { cursor: pointer; }
+.chat.spot .bub:not([disabled]):hover { border-color: var(--gold); }
+.chat.spot .bub .who { display: block; font-size: .75rem; font-weight: 700; opacity: .75; }
+.chat.spot .bub.badline { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.chat.spot .bub.picked { opacity: .6; text-decoration: line-through; }
+.order-picked { margin: 0; padding-inline-start: 24px; display: flex; flex-direction: column; gap: 6px; min-height: 8px; }
+.order-picked li { background: var(--surface); border: 1.5px solid var(--accent); border-radius: 10px; padding: 8px 12px; font-weight: 600; }
+.order-pool { display: flex; flex-direction: column; gap: 8px; }
+.ochip { font: inherit; text-align: start; padding: 10px 14px; border-radius: 12px; border: 1.5px dashed var(--muted); background: var(--bg); color: var(--ink); cursor: pointer; min-height: 48px; }
+.order-done { margin: 0; padding-inline-start: 24px; display: flex; flex-direction: column; gap: 6px; }
+.order-done li { padding: 6px 10px; border-radius: 8px; }
+.order-done li.ok { background: var(--good-soft); }
+.order-done li.no { background: var(--bad-soft); }
+.fcard.t-spot { background: var(--gold-soft); }
+.fcard.t-order { background: var(--accent-soft); }

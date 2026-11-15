@@ -138,6 +138,7 @@
     xp += (s.srsCleared || 0) * XP.srsCleared;
     xp += new Set((s.journal || []).map(j => j.d)).size * XP.journalDay;
     xp += Object.keys(s.toolsTried || {}).length * XP.tool;
+    Object.values(s.sims || {}).forEach(b => { xp += XP.story + b * XP.storyStep; });
     return xp;
   }
   function levelInfo(xp) {
@@ -180,6 +181,8 @@
     { id: 'srs10', icon: 'target', name: 'לומדים מטעויות', desc: '10 שאלות שעברו את כל החזרות', test: c => c.srsCleared >= 10 },
     { id: 'journal5', icon: 'pen', name: 'כותבי יומן', desc: '5 ימים עם רשומה ביומן', test: c => c.journalDays >= 5 },
     { id: 'tools5', icon: 'check', name: 'מהתיאוריה לחיים', desc: '5 כלים מארגז הכלים שניסיתם', test: c => c.tools >= 5 },
+    { id: 'sim1', icon: 'chat', name: 'מדברים', desc: 'סיימתם הדמיית שיחה', test: c => c.sims >= 1 },
+    { id: 'simall', icon: 'chat', name: 'שיחה זורמת', desc: 'כל התשובות טובות בכל ההדמיות', test: c => c.simsPerfect },
     { id: 'master', icon: 'crown', name: 'אמני הסבירות', desc: '10 ומעלה במבחן המסכם', test: c => c.s.final && c.s.final.best >= 10 }
   ];
   function earnedBadges(s) {
@@ -202,6 +205,8 @@
       storiesPerfect: (window.STORIES || []).length > 0 && (window.STORIES || []).every(st => (s.stories || {})[st.id] === st.steps.length),
       srsCleared: s.srsCleared || 0,
       tools: Object.keys(s.toolsTried || {}).length,
+      sims: Object.keys(s.sims || {}).length,
+      simsPerfect: (window.SIMS || []).length > 0 && (window.SIMS || []).every(x => (s.sims || {})[x.id] === x.turns.length),
       journalDays: new Set((s.journal || []).map(j => j.d)).size,
       comeback: recs.concat(Object.values(s.reviews), s.final ? [s.final] : []).some(r => r.best > r.first)
     };
@@ -379,6 +384,8 @@
     bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
     book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5C6.5 4 9.5 4 12 5.5 14.5 4 17.5 4 20 5.5V19c-2.5-1.5-5.5-1.5-8 0-2.5-1.5-5.5-1.5-8 0zM12 5.5V19"/></svg>',
     play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
     copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>',
     star: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3L2.9 9.5l6.3-.9z"/></svg>'
   };
@@ -396,7 +403,8 @@
     bookmark: '<path d="M6 3h12v18l-6-4.5L6 21z"/>',
     book: '<path d="M4 5.5C6.5 4 9.5 4 12 5.5 14.5 4 17.5 4 20 5.5V19c-2.5-1.5-5.5-1.5-8 0-2.5-1.5-5.5-1.5-8 0zM12 5.5V19"/>',
     target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".8"/>',
-    pen: '<path d="M4 20l4-1L19 8l-3-3L5 16zM14 7l3 3"/>'
+    pen: '<path d="M4 20l4-1L19 8l-3-3L5 16zM14 7l3 3"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>'
   };
   function badgeIcon(b, locked, size) {
     return '<span class="badge-ic' + (locked ? ' locked' : '') + (size ? ' ' + size : '') + '"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH[b.icon] + '</svg></span>';
@@ -1062,6 +1070,7 @@
       '<li><span>סיפור: סיום, וכל בחירה טובה (בתוצאה הכי טובה)</span><b class="num"><bdi dir="ltr">+' + XP.story + ' / +' + XP.storyStep + '</bdi></b></li>' +
       '<li><span>אימון: כל תשובה נכונה (עד 20 ביום)</span><b class="num"><bdi dir="ltr">+' + XP.practice + '</bdi></b></li>' +
       '<li><span>שאלה שעברה את כל החזרות על טעויות</span><b class="num"><bdi dir="ltr">+' + XP.srsCleared + '</bdi></b></li>' +
+      '<li><span>הדמיית שיחה: סיום, וכל תשובה טובה (בתוצאה הכי טובה)</span><b class="num"><bdi dir="ltr">+' + XP.story + ' / +' + XP.storyStep + '</bdi></b></li>' +
       '<li><span>כלי מארגז הכלים שניסיתם בחיים</span><b class="num"><bdi dir="ltr">+' + XP.tool + '</bdi></b></li>' +
       '<li><span>יום עם רשומה ביומן</span><b class="num"><bdi dir="ltr">+' + XP.journalDay + '</bdi></b></li>' +
       '<li><span>כל יום ברצף הכי ארוך</span><b class=\"num\"><bdi dir=\"ltr\">+' + XP.streakDay + '</bdi></b></li>' +
@@ -1108,7 +1117,7 @@
   /* ================= feed (short cards, one per screen) ================= */
   const FEED = window.FEED || [];
   const FEED_TOPICS = window.FEED_TOPICS || {};
-  const TYPE_LABEL = { tip: 'טיפ', tf: 'מיתוס או עובדה?', sc: 'מה הייתם עושים?', mission: 'משימת שטח', pic: 'מה רואים בתמונה?', voice: 'הקשיבו להבדל' };
+  const TYPE_LABEL = { tip: 'טיפ', tf: 'מיתוס או עובדה?', sc: 'מה הייתם עושים?', mission: 'משימת שטח', pic: 'מה רואים בתמונה?', voice: 'הקשיבו להבדל', spot: 'מה השתבש פה?', order: 'סדרו נכון' };
   let feedObserver = null;
   let deck = null;
   let deckShown = 0;
@@ -1150,6 +1159,10 @@
       body = '<p class="fstatement">' + esc(c.text) + '</p>';
       if (!done) body += '<div class="tf-btns"><button type="button" class="btn big" data-act="tf" data-v="1">עובדה</button><button type="button" class="btn big alt" data-act="tf" data-v="0">מיתוס</button></div>';
       else body += feedFeedback(done.r === 'right', (c.truth ? 'זו עובדה. ' : 'זה מיתוס. ') + c.explain);
+    } else if (c.type === 'spot') {
+      body = spotHtml(c, done);
+    } else if (c.type === 'order') {
+      body = orderHtml(c, done);
     } else if (c.type === 'voice') {
       const canSpeak = !!window.speechSynthesis;
       body = '<p class="fstatement sm">' + esc(c.question) + '</p>' + (canSpeak ? '' : '<p class="muted small">הדפדפן הזה לא יודע להקריא. קראו את שתי הגרסאות.</p>') + '<div class="voice-list">';
@@ -1274,6 +1287,19 @@
     else if (act === 'tf') r = ((btn.dataset.v === '1') === c.truth) ? 'right' : 'wrong';
     else if (act === 'sc' || act === 'voice') { p = Number(btn.dataset.k); r = p === 0 ? 'right' : 'wrong'; }
     else if (act === 'play') { const k = Number(btn.dataset.k); speak(k === 0 ? c.a : c.b); return; }
+    else if (act === 'spot') { p = Number(btn.dataset.k); r = p === c.bad ? 'right' : 'wrong'; }
+    else if (act === 'oreset') { const fin0 = art.querySelector('.finner'); fin0.outerHTML = finnerHtml(c); return; }
+    else if (act === 'ostep') {
+      const list = art.querySelector('.order-picked');
+      const picked = list.dataset.picked ? list.dataset.picked.split(',').map(Number) : [];
+      picked.push(Number(btn.dataset.k));
+      list.dataset.picked = picked.join(',');
+      list.insertAdjacentHTML('beforeend', '<li>' + esc(c.steps[Number(btn.dataset.k)]) + '</li>');
+      btn.remove();
+      sfx('tick');
+      if (picked.length < c.steps.length) return;
+      p = picked; r = picked.every((v, k) => v === k) ? 'right' : 'wrong';
+    }
     else return;
     const res = award(() => { state.feed[id] = p === undefined ? { d: today(), r } : { d: today(), r, p }; markActive(); });
     if (r === 'wrong' && ['tf', 'sc', 'pic'].includes(c.type)) srsWrong(id);
@@ -1452,7 +1478,8 @@
     { id: 'truth', name: 'אמת ושקר', topics: [13, 14, 7, 12] },
     { id: 'talk', name: 'שיחה והקשבה', topics: [8, 9, 10, 18, 19, 21, 'small'] },
     { id: 'work', name: 'עבודה', topics: ['interview', 'nego', 'feedback', 'seat', 22, 23, 16] },
-    { id: 'rel', name: 'זוגיות ויחסים', topics: ['date', 25, 26, 'apology', 'no', 'touch', 20] },
+    { id: 'rel', name: 'זוגיות ויחסים', topics: ['couple', 'date', 25, 26, 'apology', 'no', 'touch', 20] },
+    { id: 'daily', name: 'חיי יום יום', topics: ['daily', 'service', 'friends', 'family', 'small'] },
     { id: 'kids', name: 'הורות', topics: ['kids', 'emotion', 8, 21, 6] },
     { id: 'screens', name: 'מסכים, טלפון וכתב', topics: ['video', 'phone', 28, 15] },
     { id: 'presence', name: 'נוכחות וביטחון', topics: [17, 24, 29, 'nerves', 'space', 'culture'] }
@@ -1754,6 +1781,7 @@
     const due = dueMistakes().length;
     const storiesNew = (window.STORIES || []).filter(st => !(state.stories || {})[st.id]).length;
     return (due ? '<a class="card linkcard mistakes-card" href="#mistakes">' + ICON.bolt + '<span><strong>חזרה על טעויות</strong><br><span class="muted small">' + due + ' שאלות שטעיתם בהן מחכות לכם היום</span></span></a>' : '') +
+      '<a class="card linkcard sim-card" href="#sims"><span class="story-ic sim-ic">' + ICON.chat + '</span><span><strong>הדמיית שיחה</strong><br><span class="muted small">' + (window.SIMS || []).length + ' שיחות: זוגיות, חברים, משפחה, עבודה, שקרים ועוד. עם תיקון על כל טעות</span></span></a>' +
       '<a class="card linkcard tools-card" href="#tools"><span class="story-ic">' + ICON.book.replace('<svg', '<svg') + '</span><span><strong>ארגז כלים</strong><br><span class="muted small">' + (window.TOOLS || []).length + ' מצבים מהחיים: מה להגיד ומה לעשות, כבר היום</span></span></a>' +
       '<section class="tiles" aria-label="עוד דרכים ללמוד">' +
         '<a class="tile" href="#feed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10 9.5v5l4-2.5z"/></svg><strong>פיד</strong><span>' + FEED.filter(c => !state.feed[c.id] && !state.seen.includes(c.id)).length + ' חדשים</span></a>' +
@@ -1806,6 +1834,128 @@
     }));
   }
 
+  /* ================= conversation simulator ================= */
+  let sim = null;
+  const MOOD_STEP = { good: 15, ok: 0, bad: -15 };
+  function viewSims() {
+    const list = window.SIMS || [];
+    const best = state.sims || {};
+    render(backLink('#home', 'לדף הבית') +
+      '<div class="lesson-head"><h1>הדמיית שיחה</h1><p class="muted">שיחה אמיתית, תור אחרי תור. בוחרים מה לענות, רואים איך הצד השני מגיב, ואם טעיתם מקבלים תיקון: מה עדיף להגיד ולמה. אפשר לנסות שוב כל תור.</p></div>' +
+      list.map(s => '<a class="card linkcard story-card" href="#sim-' + s.id + '"><span class="story-ic sim-ic">' + ICON.chat + '</span><span><strong>' + esc(s.title) + '</strong><br><span class="muted small">' + esc(s.topic) + ' · ' + esc(s.who) + ', ' + esc(s.role) + '</span></span>' +
+        (best[s.id] === undefined ? '<span class="chip accent">חדש</span>' : '<span class="chip ok num">' + best[s.id] + '/' + s.turns.length + '</span>') + '</a>').join(''),
+      'home', 'הדמיית שיחה');
+  }
+  function startSim(id) {
+    const s = (window.SIMS || []).find(x => x.id === id);
+    if (!s) return viewSims();
+    if (!sim || sim.id !== id || sim.done) sim = { id, s, turn: 0, picks: [], fixes: 0, mood: 50, order: s.turns.map(t => shuffle(t.choices.map((_, k) => k))) };
+    drawSim();
+  }
+  function moodLabel(m) { return m >= 70 ? 'השיחה זורמת' : m >= 40 ? 'השיחה ניטרלית' : 'השיחה מתוחה'; }
+  function drawSim() {
+    const S = sim, s = S.s;
+    let html = backLink('#sims', 'לכל ההדמיות') +
+      '<div class="sim-head"><div><strong>' + esc(s.who) + '</strong><span class="muted small"> · ' + esc(s.role) + '</span></div>' +
+      '<div class="mood" aria-label="' + moodLabel(S.mood) + '"><span class="mood-bar"><span style="width:' + S.mood + '%"></span></span><span class="small">' + moodLabel(S.mood) + '</span></div></div>' +
+      '<p class="sim-intro">' + esc(s.intro) + '</p><div class="chat">';
+    for (let k = 0; k <= Math.min(S.turn, s.turns.length - 1); k++) {
+      const t = s.turns[k];
+      html += '<div class="bub them">' + esc(t.them) + '</div>' + (t.cue ? '<div class="cue">' + ICON.eye + esc(t.cue) + '</div>' : '');
+      const p = S.picks[k];
+      if (p !== undefined) {
+        const c = t.choices[p];
+        html += '<div class="bub me">' + esc(c.t) + '</div><div class="bub them reply">' + esc(c.reply) + '</div>';
+        if (k === S.turn) {
+          const good = t.choices.find(x => x.q === 'good');
+          html += '<div class="feedback ' + (c.q === 'good' ? 'right' : 'wrong') + '" id="fb" tabindex="-1" role="status">' +
+            '<strong>' + (c.q === 'good' ? 'תשובה טובה' : c.q === 'ok' ? 'לא רע, אבל אפשר טוב יותר' : 'זה החמיר את השיחה') + '</strong><p>' + esc(c.why) + '</p>' +
+            (c.q === 'good' ? '' : '<div class="fix"><span class="fix-l">תיקון: מה עדיף להגיד</span><div class="bub me good">' + esc(good.t) + '</div><p class="small">' + esc(good.why) + '</p></div>') + '</div>' +
+            '<div class="btn-row">' + (c.q === 'good' ? '' : '<button type="button" class="btn secondary" id="sim-retry">לנסות שוב את התור</button>') +
+            '<button type="button" class="btn" id="sim-next">' + (S.turn === s.turns.length - 1 ? 'לסיכום' : 'המשך') + '</button></div>';
+        }
+      }
+    }
+    html += '</div>';
+    if (S.picks[S.turn] === undefined) {
+      html += '<p class="eyebrow">מה עונים?</p><div class="options">';
+      S.order[S.turn].forEach((k, pos) => {
+        html += '<button type="button" class="opt" data-sim="' + k + '"><span class="letter">' + LETTERS[pos] + '</span><span>' + esc(s.turns[S.turn].choices[k].t) + '</span><span></span></button>';
+      });
+      html += '</div>';
+    }
+    render(html, 'home', s.title);
+    const fb = document.getElementById('fb');
+    if (fb) fb.scrollIntoView({ block: 'start' });
+    else { const last = view.querySelector('.chat > :last-child'); if (last && S.turn > 0) last.scrollIntoView({ block: 'center' }); }
+    view.querySelectorAll('[data-sim]').forEach(b => b.addEventListener('click', () => {
+      const k = Number(b.dataset.sim);
+      const q = s.turns[S.turn].choices[k].q;
+      S.picks[S.turn] = k;
+      S.mood = Math.max(0, Math.min(100, S.mood + MOOD_STEP[q]));
+      if (q === 'good') { sfx('right'); buzz(20); } else if (q === 'bad') { sfx('wrong'); buzz([40, 50, 40]); } else sfx('tick');
+      drawSim();
+    }));
+    const rt = document.getElementById('sim-retry');
+    if (rt) rt.addEventListener('click', () => {
+      const q = s.turns[S.turn].choices[S.picks[S.turn]].q;
+      S.mood = Math.max(0, Math.min(100, S.mood - MOOD_STEP[q]));
+      S.picks[S.turn] = undefined;
+      S.fixes++;
+      S.order[S.turn] = shuffle(S.order[S.turn]);
+      drawSim();
+    });
+    const nx = document.getElementById('sim-next');
+    if (nx) nx.addEventListener('click', () => { if (S.turn < s.turns.length - 1) { S.turn++; drawSim(); } else finishSim(); });
+  }
+  function finishSim() {
+    const S = sim, s = S.s;
+    S.done = true;
+    const good = S.picks.filter((p, k) => s.turns[k].choices[p].q === 'good').length;
+    const res = award(() => { state.sims = state.sims || {}; state.sims[s.id] = Math.max(state.sims[s.id] || 0, good); markActive(); });
+    const k = starsFor(good, s.turns.length);
+    const lessons = s.turns.map((t, i) => {
+      const c = t.choices[S.picks[i]], g = t.choices.find(x => x.q === 'good');
+      return '<li class="' + (c.q === 'good' ? 'r' : 'w') + '">' + (c.q === 'good' ? ICON.check : ICON.cross) + '<span><strong>' + esc(t.them) + '</strong><br><span class="muted">הכי טוב: ' + esc(g.t) + '</span></span></li>';
+    }).join('');
+    render('<section class="card result"><span class="eyebrow">' + esc(s.title) + '</span>' + stars(k, 'big pop') +
+      '<div class="score num">' + good + '<span>/' + s.turns.length + '</span></div><p>תשובות טובות. ' + moodLabel(S.mood) + ' בסוף.' + (S.fixes ? ' השתמשתם ב-' + S.fixes + ' ניסיונות חוזרים.' : '') + '</p>' +
+      '<div class="xpgain"><bdi dir="ltr" class="num">+' + res.gained + ' XP</bdi></div>' +
+      (res.gained ? '' : '<p class="muted small">XP בהדמיה ניתן על שיפור התוצאה הכי טובה.</p>') + '</section>' +
+      '<div class="btn-row"><button type="button" class="btn secondary" id="sim-again">לשחק שוב מההתחלה</button><a class="btn" href="#sims">להדמיה אחרת</a></div>' +
+      '<section class="section"><h2>מה כדאי לזכור</h2><ul class="recap">' + lessons + '</ul></section>', 'home', 'סוף ההדמיה');
+    document.getElementById('sim-again').addEventListener('click', () => { sim = null; startSim(s.id); });
+    sfx('done'); celebrate(res); if (k === 3 && !S.fixes) confetti();
+  }
+
+  /* ================= feed formats: spot the moment, put in order ================= */
+  const stepOrders = {};
+  function stepOrder(c) { if (!stepOrders[c.id]) stepOrders[c.id] = shuffle(c.steps.map((_, k) => k)); return stepOrders[c.id]; }
+  function spotHtml(c, done) {
+    let h = '<p class="fstatement sm">באיזו שורה השיחה השתבשה?</p><div class="chat spot">';
+    c.lines.forEach((ln, k) => {
+      const me = ln[0] === 'אתם';
+      let cls = 'bub ' + (me ? 'me' : 'them');
+      if (done) { if (k === c.bad) cls += ' badline'; else if (k === done.p) cls += ' picked'; }
+      h += '<button type="button" class="' + cls + '" data-act="spot" data-k="' + k + '"' + (done ? ' disabled' : '') + '><span class="who">' + esc(ln[0]) + '</span>' + esc(ln[1]) + '</button>';
+    });
+    h += '</div>';
+    if (done) h += feedFeedback(done.r === 'right', c.explain) + '<div class="fix"><span class="fix-l">תיקון: מה עדיף להגיד</span><div class="bub me good">' + esc(c.better) + '</div></div>';
+    return h;
+  }
+  function orderHtml(c, done) {
+    let h = '<p class="fstatement sm">' + esc(c.title) + ': סדרו את השלבים</p>';
+    if (done) {
+      h += '<ol class="order-done">' + c.steps.map((st, k) => '<li class="' + ((done.p || [])[k] === k ? 'ok' : 'no') + '">' + esc(st) + '</li>').join('') + '</ol>';
+      h += feedFeedback(done.r === 'right', (done.r === 'right' ? '' : 'זה הסדר הנכון. ') + c.explain);
+    } else {
+      h += '<ol class="order-picked" data-picked=""></ol><div class="order-pool">' +
+        stepOrder(c).map(k => '<button type="button" class="ochip" data-act="ostep" data-k="' + k + '">' + esc(c.steps[k]) + '</button>').join('') + '</div>' +
+        '<button type="button" class="btn ghost small-btn" data-act="oreset">להתחיל מחדש</button>';
+    }
+    return h;
+  }
+
   /* ================= router ================= */
   function route() {
     const h = (location.hash || '').replace(/^#/, '');
@@ -1822,6 +1972,8 @@
     if (h === 'blitz') return viewBlitz();
     if (h === 'practice') return viewPractice();
     if (h === 'tools') return viewTools();
+    if (h === 'sims') return viewSims();
+    if ((m = h.match(/^sim-([a-z]+)$/))) return startSim(m[1]);
     if (h === 'mistakes') return startQuiz('mistakes', 0);
     if (h === 'stories') return viewStories();
     if (h === 'journal') return viewJournal();
