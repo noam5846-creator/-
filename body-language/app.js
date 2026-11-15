@@ -424,7 +424,9 @@
   }
 
   const view = document.getElementById('view');
+  const LEARN_ROUTE = /^#(learn|sims|sim-|stories|story-|tools|practice|mistakes|blitz|journal)/;
   function setTab(name) {
+    if (LEARN_ROUTE.test(location.hash)) name = 'learn';
     document.querySelectorAll('.tabbar a').forEach(a => {
       if (a.dataset.tab === name) a.setAttribute('aria-current', 'page');
       else a.removeAttribute('aria-current');
@@ -566,7 +568,7 @@
       }
     }
 
-    const reviews = pendingReviews().map(w =>
+    const reviews = pendingReviews().slice(0, 1).map(w =>
       '<section class="card review-card">' +
         '<span class="eyebrow">שלב בונוס · מבחן חזרה שבוע ' + w + '</span>' +
         '<h2>7 שאלות על שיעורים ' + WEEKS[w - 1].from + '–' + WEEKS[w - 1].to + '</h2>' +
@@ -862,6 +864,7 @@
         s.answers[s.i] = ok;
         s.combo = ok ? s.combo + 1 : 0;
         if (!ok) srsWrong(Q.qid); else if (s.kind === 'mistakes') srsRight(Q.qid);
+        recordTopic(Q.qid, ok);
         s.bestCombo = Math.max(s.bestCombo, s.combo);
         if (ok) { sfx('right'); buzz(20); } else { sfx('wrong'); buzz([40, 50, 40]); }
         drawQuiz();
@@ -1043,6 +1046,7 @@
       '</div>' +
       '<a class="card linkcard" href="#saved">' + ICON.bookmark + '<span><strong>הכרטיסים השמורים</strong><br><span class="muted small">' + state.saved.length + ' כרטיסים</span></span></a>' +
 
+      weakBlock(5) +
       '<section class="card"><div class="quests-head"><h2>הישגים</h2><span class="chip num">' + earned.length + '/' + BADGES.length + '</span></div><div class="badge-grid">' +
         BADGES.map(b => {
           const has = earned.includes(b.id);
@@ -1303,6 +1307,7 @@
     else return;
     const res = award(() => { state.feed[id] = p === undefined ? { d: today(), r } : { d: today(), r, p }; markActive(); });
     if (r === 'wrong' && ['tf', 'sc', 'pic'].includes(c.type)) srsWrong(id);
+    if (r === 'right' || r === 'wrong') recordTopic(id, r === 'right');
     if (r === 'wrong') { sfx('wrong'); buzz([40, 50, 40]); } else { sfx('right'); buzz(20); }
     const fin = art.querySelector('.finner');
     fin.outerHTML = finnerHtml(c);
@@ -1779,16 +1784,8 @@
   /* ================= home extras ================= */
   function moreBlock() {
     const due = dueMistakes().length;
-    const storiesNew = (window.STORIES || []).filter(st => !(state.stories || {})[st.id]).length;
     return (due ? '<a class="card linkcard mistakes-card" href="#mistakes">' + ICON.bolt + '<span><strong>חזרה על טעויות</strong><br><span class="muted small">' + due + ' שאלות שטעיתם בהן מחכות לכם היום</span></span></a>' : '') +
-      '<a class="card linkcard sim-card" href="#sims"><span class="story-ic sim-ic">' + ICON.chat + '</span><span><strong>הדמיית שיחה</strong><br><span class="muted small">' + (window.SIMS || []).length + ' שיחות: זוגיות, חברים, משפחה, עבודה, שקרים ועוד. עם תיקון על כל טעות</span></span></a>' +
-      '<a class="card linkcard tools-card" href="#tools"><span class="story-ic">' + ICON.book.replace('<svg', '<svg') + '</span><span><strong>ארגז כלים</strong><br><span class="muted small">' + (window.TOOLS || []).length + ' מצבים מהחיים: מה להגיד ומה לעשות, כבר היום</span></span></a>' +
-      '<section class="tiles" aria-label="עוד דרכים ללמוד">' +
-        '<a class="tile" href="#feed"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10 9.5v5l4-2.5z"/></svg><strong>פיד</strong><span>' + FEED.filter(c => !state.feed[c.id] && !state.seen.includes(c.id)).length + ' חדשים</span></a>' +
-        '<a class="tile gold" href="#blitz"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.bolt + '</svg><strong>סבב בזק</strong><span>שיא: ' + (state.blitz.best || 0) + '</span></a>' +
-        '<a class="tile" href="#stories"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.book + '</svg><strong>סיפורים</strong><span>' + (storiesNew ? storiesNew + ' חדשים' : 'שחקו שוב') + '</span></a>' +
-        '<a class="tile" href="#practice"><svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.target + '</svg><strong>אימון</strong><span>לפי נושא</span></a>' +
-      '</section>';
+      '<a class="card linkcard learn-cta" href="#learn"><span class="story-ic sim-ic">' + ICON.chat + '</span><span><strong>תרגול</strong><br><span class="muted small">הדמיות שיחה, ארגז כלים, סיפורים, סבב בזק ואימון</span></span></a>';
   }
 
   /* ================= toolbox ================= */
@@ -1849,7 +1846,7 @@
   function startSim(id) {
     const s = (window.SIMS || []).find(x => x.id === id);
     if (!s) return viewSims();
-    if (!sim || sim.id !== id || sim.done) sim = { id, s, turn: 0, picks: [], fixes: 0, mood: 50, order: s.turns.map(t => shuffle(t.choices.map((_, k) => k))) };
+    if (!sim || sim.id !== id || sim.done) sim = { id, s, turn: 0, picks: [], first: [], fixes: 0, mood: 50, order: s.turns.map(t => shuffle(t.choices.map((_, k) => k))) };
     drawSim();
   }
   function moodLabel(m) { return m >= 70 ? 'השיחה זורמת' : m >= 40 ? 'השיחה ניטרלית' : 'השיחה מתוחה'; }
@@ -1892,6 +1889,7 @@
       const k = Number(b.dataset.sim);
       const q = s.turns[S.turn].choices[k].q;
       S.picks[S.turn] = k;
+      if (S.first[S.turn] === undefined) S.first[S.turn] = k;
       S.mood = Math.max(0, Math.min(100, S.mood + MOOD_STEP[q]));
       if (q === 'good') { sfx('right'); buzz(20); } else if (q === 'bad') { sfx('wrong'); buzz([40, 50, 40]); } else sfx('tick');
       drawSim();
@@ -1911,15 +1909,15 @@
   function finishSim() {
     const S = sim, s = S.s;
     S.done = true;
-    const good = S.picks.filter((p, k) => s.turns[k].choices[p].q === 'good').length;
+    const good = S.first.filter((p, k) => s.turns[k].choices[p].q === 'good').length;
     const res = award(() => { state.sims = state.sims || {}; state.sims[s.id] = Math.max(state.sims[s.id] || 0, good); markActive(); });
     const k = starsFor(good, s.turns.length);
     const lessons = s.turns.map((t, i) => {
-      const c = t.choices[S.picks[i]], g = t.choices.find(x => x.q === 'good');
+      const c = t.choices[S.first[i]], g = t.choices.find(x => x.q === 'good');
       return '<li class="' + (c.q === 'good' ? 'r' : 'w') + '">' + (c.q === 'good' ? ICON.check : ICON.cross) + '<span><strong>' + esc(t.them) + '</strong><br><span class="muted">הכי טוב: ' + esc(g.t) + '</span></span></li>';
     }).join('');
     render('<section class="card result"><span class="eyebrow">' + esc(s.title) + '</span>' + stars(k, 'big pop') +
-      '<div class="score num">' + good + '<span>/' + s.turns.length + '</span></div><p>תשובות טובות. ' + moodLabel(S.mood) + ' בסוף.' + (S.fixes ? ' השתמשתם ב-' + S.fixes + ' ניסיונות חוזרים.' : '') + '</p>' +
+      '<div class="score num">' + good + '<span>/' + s.turns.length + '</span></div><p>תשובות טובות בניסיון הראשון. ' + moodLabel(S.mood) + ' בסוף.' + (S.fixes ? ' תיקנתם ' + S.fixes + ' תורות, וזה בדיוק מה שהתיקון נועד לו, אבל הציון וה-XP נספרים לפי הניסיון הראשון.' : '') + '</p>' +
       '<div class="xpgain"><bdi dir="ltr" class="num">+' + res.gained + ' XP</bdi></div>' +
       (res.gained ? '' : '<p class="muted small">XP בהדמיה ניתן על שיפור התוצאה הכי טובה.</p>') + '</section>' +
       '<div class="btn-row"><button type="button" class="btn secondary" id="sim-again">לשחק שוב מההתחלה</button><a class="btn" href="#sims">להדמיה אחרת</a></div>' +
@@ -1956,6 +1954,67 @@
     return h;
   }
 
+  /* ================= topic stats (weak spots) ================= */
+  function topicOfQid(qid) {
+    const m = /^[LH](\d+)-/.exec(qid || '');
+    if (m) return Number(m[1]);
+    const c = cardById(qid);
+    return c ? c.topic : null;
+  }
+  function recordTopic(qid, ok) {
+    const t = topicOfQid(qid);
+    if (t === null || t === undefined) return;
+    state.topicStats = state.topicStats || {};
+    const r = state.topicStats[t] || [0, 0];
+    state.topicStats[t] = [r[0] + (ok ? 1 : 0), r[1] + 1];
+    save();
+  }
+  function weakTopics(limit) {
+    const st = state.topicStats || {};
+    return Object.keys(st).map(k => ({ t: /^\d+$/.test(k) ? Number(k) : k, right: st[k][0], total: st[k][1] }))
+      .filter(x => x.total >= 3 && x.right / x.total < 0.8)
+      .sort((a, b) => a.right / a.total - b.right / b.total || b.total - a.total)
+      .slice(0, limit || 5);
+  }
+  function weakBlock(limit) {
+    const list = weakTopics(limit);
+    const st = state.topicStats || {};
+    const answered = Object.values(st).reduce((s, r) => s + r[1], 0);
+    let body;
+    if (!list.length) {
+      body = answered < 15
+        ? '<p class="muted small">אחרי שתענו על עוד כמה שאלות (בשלבים, בפיד ובאימון), כאן יופיעו הנושאים שהכי קשים לכם.</p>'
+        : '<p class="small">אין כרגע נושא שבו אתם מתחת ל-80%. יפה מאוד.</p>';
+    } else {
+      body = '<ul class="weak">' + list.map(x => {
+        const pct = Math.round(x.right / x.total * 100);
+        const open = topicOpen(x.t);
+        return '<li><span class="weak-name">' + esc(shortTopic(x.t)) + '<span class="muted small num"> · ' + x.right + '/' + x.total + '</span></span>' +
+          '<span class="weak-bar"><span style="width:' + pct + '%"></span></span><b class="num">' + pct + '%</b>' +
+          (open ? '<a class="btn secondary small-btn" href="#practice-' + x.t + '">אימון</a>' : '<span></span>') + '</li>';
+      }).join('') + '</ul>';
+    }
+    return '<section class="card"><h2>הנושאים שהכי קשים לי</h2>' + body + '</section>';
+  }
+
+  /* ================= practice hub ================= */
+  function viewLearn() {
+    const due = dueMistakes().length;
+    const sims = window.SIMS || [], sts = window.STORIES || [], tools = window.TOOLS || [];
+    const simDone = Object.keys(state.sims || {}).length, stDone = Object.keys(state.stories || {}).length, toolsTried = Object.keys(state.toolsTried || {}).length;
+    const item = (href, ic, title, sub, cls) => '<a class="card linkcard hub-item' + (cls ? ' ' + cls : '') + '" href="' + href + '"><span class="story-ic">' + ic + '</span><span><strong>' + title + '</strong><br><span class="muted small">' + sub + '</span></span></a>';
+    render('<div class="lesson-head"><h1>תרגול</h1><p class="muted">כל דרכי התרגול במקום אחד.</p></div>' +
+      (due ? item('#mistakes', ICON.bolt, 'חזרה על טעויות', due + ' שאלות מחכות לכם היום', 'mistakes-card') : '') +
+      item('#sims', ICON.chat, 'הדמיית שיחה', sims.length + ' שיחות עם תיקון על כל טעות · עשיתם ' + simDone, 'sim-card') +
+      item('#tools', ICON.book, 'ארגז כלים', tools.length + ' מצבים: מה להגיד ומה לעשות · ניסיתם ' + toolsTried, 'tools-card') +
+      item('#stories', ICON.book, 'סיפורים', sts.length + ' סיפורים שמתקדמים לפי הבחירות · עשיתם ' + stDone) +
+      item('#blitz', ICON.bolt, 'סבב בזק', '60 שניות של מיתוס או עובדה · שיא: ' + (state.blitz.best || 0)) +
+      item('#practice', '<svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.target + '</svg>', 'אימון לפי נושא', 'עד 10 שאלות בנושא שתבחרו, ו-9 מסלולים') +
+      item('#journal', '<svg viewBox="0 0 24 24" aria-hidden="true">' + GLYPH.pen + '</svg>', 'היומן שלי', (state.journal || []).length + ' רשומות') +
+      weakBlock(3),
+      'learn', 'תרגול');
+  }
+
   /* ================= router ================= */
   function route() {
     const h = (location.hash || '').replace(/^#/, '');
@@ -1972,6 +2031,7 @@
     if (h === 'blitz') return viewBlitz();
     if (h === 'practice') return viewPractice();
     if (h === 'tools') return viewTools();
+    if (h === 'learn') return viewLearn();
     if (h === 'sims') return viewSims();
     if ((m = h.match(/^sim-([a-z]+)$/))) return startSim(m[1]);
     if (h === 'mistakes') return startQuiz('mistakes', 0);

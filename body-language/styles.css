@@ -129,7 +129,7 @@ a { color: var(--accent); }
   inset: auto 0 0 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -990,3 +990,13 @@ body.feed-mode .view > * { animation: none; }
 .order-done li.no { background: var(--bad-soft); }
 .fcard.t-spot { background: var(--gold-soft); }
 .fcard.t-order { background: var(--accent-soft); }
+
+/* practice hub & weak topics */
+.learn-cta { border-color: var(--gold); background: var(--gold-soft); }
+.hub-item .story-ic svg { width: 26px; height: 26px; fill: none; stroke: var(--accent-strong); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.weak { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.weak li { display: grid; grid-template-columns: minmax(0, 1fr) 70px auto auto; gap: 10px; align-items: center; }
+.weak-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weak-bar { height: 8px; border-radius: 999px; background: var(--sunken); overflow: hidden; }
+.weak-bar span { display: block; height: 100%; background: var(--bad); }
+.tabbar a { font-size: .76rem; }
